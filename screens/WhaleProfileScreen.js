@@ -1,60 +1,74 @@
 import { StyleSheet, Text, View, ScrollView, TouchableOpacity } from 'react-native';
 
-const whale = {
-  name: 'Soccer Ghost',
-  rank: 3,
-  status: 'Active · Last bet 8 min ago',
-  overallWinRate: '71%',
-  totalProfit: '$1.4M',
-  avgROI: '+34%',
-  totalBets: 140,
+const isPro = false;
+
+// Fallback profile data shown when a card doesn't carry full stats
+const DEFAULT_PROFILE = {
+  overallWinRate: '—',
+  totalProfit: '$???',
+  avgROI: '+??%',
+  totalBets: '—',
   sports: [
-    { name: 'Soccer', pct: 78, color: '#00c896' },
-    { name: 'Politics', pct: 65, color: '#a07fff' },
-    { name: 'UFC', pct: 58, color: '#ffaa44' },
-    { name: 'Crypto', pct: 51, color: '#444' },
+    { name: 'Soccer', pct: 71, color: '#00c896' },
+    { name: 'Politics', pct: 58, color: '#a07fff' },
+    { name: 'UFC', pct: 52, color: '#ffaa44' },
+    { name: 'Crypto', pct: 47, color: '#444' },
   ],
   recentBets: [
-    { market: 'Brazil WC · YES · $280K', result: 'Open', win: null },
-    { market: 'Arsenal top 4 · YES · $190K', result: '+$142K', win: true },
-    { market: 'Man City · YES · $140K', result: '+$98K', win: true },
-    { market: 'Canelo KO · YES · $95K', result: '-$95K', win: false },
-    { market: 'Brazil Copa · YES · $220K', result: '+$176K', win: true },
+    { market: 'Loading bet history…', result: 'Open', win: null },
+    { market: '———', result: '???', win: true },
+    { market: '———', result: '???', win: true },
+    { market: '———', result: '???', win: false },
+    { market: '———', result: '???', win: true },
   ],
 };
 
-const isPro = false;
+export default function WhaleProfileScreen({ route, navigation }) {
+  const whale = route?.params?.whale ?? {};
 
-export default function WhaleProfileScreen() {
+  const name = whale.name ?? 'Unknown Whale';
+  const status = whale.time ? `Active · Last bet ${whale.time}` : 'Status unknown';
+  const profile = DEFAULT_PROFILE;
+
+  // Derive a rank-like display from the whale type
+  const rankLabel = { active: 'A', ghost: 'G', dormant: 'D', consensus: 'C' }[whale.type] ?? 'W';
+  const accentColor = { active: '#00c896', ghost: '#00aaff', dormant: '#a07fff', consensus: '#7fff9b' }[whale.type] ?? '#00c896';
+  const avatarBg = { active: '#0a2a1a', ghost: '#0b1220', dormant: '#0c0a18', consensus: '#0a1408' }[whale.type] ?? '#0a2a1a';
+
   return (
     <View style={styles.container}>
       <ScrollView showsVerticalScrollIndicator={false}>
 
         <View style={styles.header}>
-          <TouchableOpacity style={styles.backBtn}>
-            <Text style={styles.backText}>← Back</Text>
+          <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
+            <Text style={[styles.backText, { color: accentColor }]}>← Back</Text>
           </TouchableOpacity>
         </View>
 
         <View style={styles.profileTop}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>W{whale.rank}</Text>
+          <View style={[styles.avatar, { backgroundColor: avatarBg, borderColor: accentColor + '44', borderWidth: 1 }]}>
+            <Text style={[styles.avatarText, { color: accentColor }]}>{rankLabel}</Text>
           </View>
-          <View>
-            <Text style={styles.whaleName}>{whale.name}</Text>
-            <Text style={styles.whaleStatus}>{whale.status}</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.whaleName}>{name}</Text>
+            <Text style={styles.whaleStatus}>{status}</Text>
+            {whale.amount && (
+              <Text style={[styles.whaleLatest, { color: accentColor }]}>
+                Latest: {whale.amount} · {whale.direction}
+              </Text>
+            )}
           </View>
         </View>
 
         <View style={styles.statsGrid}>
           <View style={styles.statBox}>
-            <Text style={styles.statVal}>{whale.overallWinRate}</Text>
+            <Text style={[styles.statVal, { color: accentColor }]}>{profile.overallWinRate}</Text>
             <Text style={styles.statLabel}>Overall win rate</Text>
           </View>
           <View style={styles.statBox}>
             {isPro ? (
               <>
-                <Text style={styles.statVal}>{whale.totalProfit}</Text>
+                <Text style={[styles.statVal, { color: accentColor }]}>{profile.totalProfit}</Text>
                 <Text style={styles.statLabel}>Total profit</Text>
               </>
             ) : (
@@ -67,7 +81,7 @@ export default function WhaleProfileScreen() {
           <View style={styles.statBox}>
             {isPro ? (
               <>
-                <Text style={styles.statVal}>{whale.avgROI}</Text>
+                <Text style={[styles.statVal, { color: accentColor }]}>{profile.avgROI}</Text>
                 <Text style={styles.statLabel}>Avg ROI</Text>
               </>
             ) : (
@@ -78,14 +92,29 @@ export default function WhaleProfileScreen() {
             )}
           </View>
           <View style={styles.statBox}>
-            <Text style={styles.statVal}>{whale.totalBets}</Text>
+            <Text style={[styles.statVal, { color: accentColor }]}>{profile.totalBets}</Text>
             <Text style={styles.statLabel}>Total bets</Text>
           </View>
         </View>
 
+        {whale.market && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Current position</Text>
+            <View style={[styles.positionBox, { borderColor: accentColor + '33' }]}>
+              <Text style={styles.positionMarket}>{whale.market}</Text>
+              <View style={styles.positionRow}>
+                <View style={[styles.dirChip, { backgroundColor: whale.direction === 'YES' ? '#0a2a1a' : '#2a0a0a' }]}>
+                  <Text style={[styles.dirText, { color: whale.direction === 'YES' ? '#00c896' : '#ff5555' }]}>{whale.direction}</Text>
+                </View>
+                <Text style={[styles.positionAmount, { color: accentColor }]}>{whale.amount}</Text>
+              </View>
+            </View>
+          </View>
+        )}
+
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Win rate by category</Text>
-          {whale.sports.map((sport) => (
+          {profile.sports.map((sport) => (
             <View key={sport.name} style={styles.sportRow}>
               <Text style={styles.sportName}>{sport.name}</Text>
               <View style={styles.barTrack}>
@@ -111,12 +140,12 @@ export default function WhaleProfileScreen() {
           <Text style={styles.sectionTitle}>Bet history</Text>
           <View style={styles.historyBox}>
             <View style={styles.historyItem}>
-              <Text style={styles.historyMarket}>{whale.recentBets[0].market}</Text>
+              <Text style={styles.historyMarket}>{profile.recentBets[0].market}</Text>
               <Text style={styles.historyOpen}>Open</Text>
             </View>
 
             {isPro ? (
-              whale.recentBets.slice(1).map((bet, i) => (
+              profile.recentBets.slice(1).map((bet, i) => (
                 <View key={i} style={styles.historyItem}>
                   <Text style={styles.historyMarket}>{bet.market}</Text>
                   <Text style={[styles.historyResult, { color: bet.win ? '#00c896' : '#ff5555' }]}>{bet.result}</Text>
@@ -125,7 +154,7 @@ export default function WhaleProfileScreen() {
             ) : (
               <View style={styles.lockedHistory}>
                 <View style={styles.blurredRows}>
-                  {whale.recentBets.slice(1).map((bet, i) => (
+                  {profile.recentBets.slice(1).map((bet, i) => (
                     <View key={i} style={styles.historyItemBlurred}>
                       <Text style={styles.historyMarketBlurred}>{bet.market}</Text>
                       <Text style={styles.historyResultBlurred}>{bet.result}</Text>
@@ -160,19 +189,26 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0a0a0a' },
   header: { paddingTop: 60, paddingHorizontal: 16, paddingBottom: 8 },
   backBtn: { alignSelf: 'flex-start' },
-  backText: { color: '#00c896', fontSize: 14 },
+  backText: { fontSize: 14 },
   profileTop: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, marginBottom: 16 },
-  avatar: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#0a2a1a', alignItems: 'center', justifyContent: 'center' },
-  avatarText: { fontSize: 14, color: '#00c896', fontWeight: '800' },
+  avatar: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
+  avatarText: { fontSize: 14, fontWeight: '800' },
   whaleName: { fontSize: 18, fontWeight: '800', color: '#fff' },
   whaleStatus: { fontSize: 11, color: '#555', marginTop: 2 },
+  whaleLatest: { fontSize: 11, marginTop: 4 },
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16, marginBottom: 16 },
   statBox: { backgroundColor: '#131313', borderRadius: 10, padding: 10, borderWidth: 0.5, borderColor: '#1e1e1e', width: '47%' },
-  statVal: { fontSize: 18, fontWeight: '800', color: '#00c896' },
+  statVal: { fontSize: 18, fontWeight: '800' },
   statValLocked: { fontSize: 18, fontWeight: '800', color: '#1e1e1e', backgroundColor: '#1e1e1e', borderRadius: 4 },
   statLabel: { fontSize: 10, color: '#444', marginTop: 2 },
   section: { paddingHorizontal: 16, marginBottom: 16 },
   sectionTitle: { fontSize: 11, color: '#444', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 },
+  positionBox: { backgroundColor: '#131313', borderRadius: 12, padding: 12, borderWidth: 0.5 },
+  positionMarket: { fontSize: 13, color: '#ccc', marginBottom: 8 },
+  positionRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  dirChip: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+  dirText: { fontSize: 11, fontWeight: '700' },
+  positionAmount: { fontSize: 16, fontWeight: '800' },
   sportRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
   sportName: { fontSize: 11, color: '#666', width: 52 },
   barTrack: { flex: 1, height: 4, backgroundColor: '#1a1a1a', borderRadius: 2, overflow: 'hidden' },

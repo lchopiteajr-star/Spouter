@@ -19,6 +19,15 @@ function FeedStack() {
   );
 }
 
+function LeaderboardStack() {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="LeaderboardMain" component={LeaderboardScreen} />
+      <Stack.Screen name="WhaleProfile" component={WhaleProfileScreen} />
+    </Stack.Navigator>
+  );
+}
+
 export default function App() {
   return (
     <NavigationContainer>
@@ -51,28 +60,28 @@ export default function App() {
         />
         <Tab.Screen
           name="Board"
-          component={LeaderboardScreen}
+          component={LeaderboardStack}
           options={{
             tabBarIcon: ({ color }) => <Text style={{ fontSize: 16, color }}>🏆</Text>,
           }}
         />
         <Tab.Screen
           name="Mine"
-          component={FeedScreen}
+          component={FeedStack}
           options={{
             tabBarIcon: ({ color }) => <Text style={{ fontSize: 16, color }}>💼</Text>,
           }}
         />
         <Tab.Screen
           name="Markets"
-          component={FeedScreen}
+          component={FeedStack}
           options={{
             tabBarIcon: ({ color }) => <Text style={{ fontSize: 16, color }}>🔍</Text>,
           }}
         />
         <Tab.Screen
           name="Me"
-          component={FeedScreen}
+          component={FeedStack}
           options={{
             tabBarIcon: ({ color }) => <Text style={{ fontSize: 16, color }}>👤</Text>,
           }}

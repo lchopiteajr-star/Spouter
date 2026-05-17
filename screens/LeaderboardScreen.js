@@ -13,7 +13,7 @@ const whales = [
 
 const filters = ['All', 'Soccer', 'UFC', 'Crypto', 'Politics'];
 
-export default function LeaderboardScreen() {
+export default function LeaderboardScreen({ navigation }) {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -31,7 +31,24 @@ export default function LeaderboardScreen() {
       <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
         {whales.map((whale) => (
           whale.top ? (
-            <TouchableOpacity key={whale.rank} style={styles.row}>
+            <TouchableOpacity
+              key={whale.rank}
+              style={styles.row}
+              onPress={() => navigation.navigate('WhaleProfile', {
+                whale: {
+                  id: whale.rank,
+                  name: whale.name,
+                  type: 'active',
+                  badge: whale.sport,
+                  market: `${whale.sport} markets`,
+                  amount: whale.profit,
+                  direction: 'YES',
+                  time: 'recently',
+                  stat: `${whale.winRate} win rate`,
+                  raw: { category: whale.sport.toLowerCase() },
+                },
+              })}
+            >
               <Text style={styles.rank}>#{whale.rank}</Text>
               <View style={styles.avatar}>
                 <Text style={styles.avatarText}>W{whale.rank}</Text>

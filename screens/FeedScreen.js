@@ -1,51 +1,6 @@
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity } from 'react-native';
-
-const whales = [
-  {
-    id: 1,
-    name: 'Whale #3',
-    type: 'active',
-    badge: '71% soccer',
-    market: 'Brazil World Cup',
-    amount: '$280K',
-    direction: 'YES',
-    time: '2 min ago',
-    stat: '$1.4M profit',
-  },
-  {
-    id: 2,
-    name: 'Ghost wallet',
-    type: 'ghost',
-    badge: 'New · 3 days old',
-    market: 'Chimaev to win',
-    amount: '$500K',
-    direction: 'YES',
-    time: '8 min ago',
-    stat: 'First ever bet',
-  },
-  {
-    id: 3,
-    name: 'Whale #7',
-    type: 'dormant',
-    badge: 'Dormant 14mo',
-    market: 'Trump 2026',
-    amount: '$900K',
-    direction: 'NO',
-    time: '22 min ago',
-    stat: 'Just woke up',
-  },
-  {
-    id: 4,
-    name: 'Consensus alert',
-    type: 'consensus',
-    badge: '3 whales · 90min',
-    market: 'BTC higher 1hr',
-    amount: '$1.8M combined',
-    direction: 'YES',
-    time: '1 hr ago',
-    stat: 'Strong signal',
-  },
-];
+import { StyleSheet, Text, View, ScrollView, TouchableOpacity, ActivityIndicator, RefreshControl } from 'react-native';
+import { useState, useEffect, useCallback } from 'react';
+import { fetchWhaleActivity } from '../services/polymarket';
 
 const typeColors = {
   active: '#00c896',
@@ -61,47 +16,101 @@ const typeBackground = {
   consensus: '#0a1408',
 };
 
-export default function FeedScreen() {
+const FILTERS = ['All', 'Sports', 'Crypto', 'UFC', 'Politics'];
+
+const categoryToFilter = {
+  sports: 'Sports',
+  crypto: 'Crypto',
+  ufc: 'UFC',
+  politics: 'Politics',
+};
+
+export default function FeedScreen({ navigation }) {
+  const [whales, setWhales] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [activeFilter, setActiveFilter] = useState('All');
+
+  const load = useCallback(async () => {
+    const data = await fetchWhaleActivity();
+    setWhales(data);
+    setLoading(false);
+    setRefreshing(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const onRefresh = () => { setRefreshing(true); load(); };
+
+  const filtered = activeFilter === 'All'
+    ? whales
+    : whales.filter((w) => categoryToFilter[w.raw?.category] === activeFilter);
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
         <View>
           <Text style={styles.logo}>spout<Text style={styles.logoGreen}>er</Text></Text>
-          <Text style={styles.headerSub}>● live · 4 active markets</Text>
+          <Text style={styles.headerSub}>● live · {whales.length} active markets</Text>
         </View>
       </View>
 
       <View style={styles.filters}>
-        {['All', 'Sports', 'Crypto', 'Ghost'].map((f, i) => (
-          <TouchableOpacity key={f} style={[styles.filter, i === 0 && styles.filterActive]}>
-            <Text style={[styles.filterText, i === 0 && styles.filterTextActive]}>{f}</Text>
+        {FILTERS.map((f) => (
+          <TouchableOpacity
+            key={f}
+            style={[styles.filter, f === activeFilter && styles.filterActive]}
+            onPress={() => setActiveFilter(f)}
+          >
+            <Text style={[styles.filterText, f === activeFilter && styles.filterTextActive]}>{f}</Text>
           </TouchableOpacity>
         ))}
       </View>
 
-      <ScrollView style={styles.feed} showsVerticalScrollIndicator={false}>
-        {whales.map((whale) => (
-          <TouchableOpacity key={whale.id} style={[styles.card, { backgroundColor: typeBackground[whale.type], borderColor: typeColors[whale.type] + '44' }]}>
-            <View style={styles.cardTop}>
-              <Text style={styles.whaleName}>{whale.name}</Text>
-              <View style={[styles.badge, { backgroundColor: typeColors[whale.type] + '22' }]}>
-                <Text style={[styles.badgeText, { color: typeColors[whale.type] }]}>{whale.badge}</Text>
-              </View>
-            </View>
-            <View style={styles.cardMid}>
-              <Text style={styles.amount}>{whale.amount}</Text>
-              <Text style={styles.market}> · {whale.market} · </Text>
-              <View style={[styles.direction, { backgroundColor: whale.direction === 'YES' ? '#0a2a1a' : '#2a0a0a' }]}>
-                <Text style={[styles.directionText, { color: whale.direction === 'YES' ? '#00c896' : '#ff5555' }]}>{whale.direction}</Text>
-              </View>
-            </View>
-            <View style={styles.cardBottom}>
-              <Text style={styles.time}>{whale.time}</Text>
-              <Text style={[styles.stat, { color: typeColors[whale.type] }]}>{whale.stat}</Text>
-            </View>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
+      {loading ? (
+        <View style={styles.loadingWrap}>
+          <ActivityIndicator color="#00c896" />
+          <Text style={styles.loadingText}>Scanning whale activity…</Text>
+        </View>
+      ) : (
+        <ScrollView
+          style={styles.feed}
+          showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#00c896" />}
+        >
+          {filtered.length === 0 ? (
+            <Text style={styles.emptyText}>No whale activity in this category right now.</Text>
+          ) : (
+            filtered.map((whale) => (
+              <TouchableOpacity
+                key={whale.id}
+                style={[styles.card, { backgroundColor: typeBackground[whale.type], borderColor: typeColors[whale.type] + '44' }]}
+                onPress={() => navigation.navigate('WhaleProfile', { whale })}
+                activeOpacity={0.75}
+              >
+                <View style={styles.cardTop}>
+                  <Text style={styles.whaleName}>{whale.name}</Text>
+                  <View style={[styles.badge, { backgroundColor: typeColors[whale.type] + '22' }]}>
+                    <Text style={[styles.badgeText, { color: typeColors[whale.type] }]}>{whale.badge}</Text>
+                  </View>
+                </View>
+                <View style={styles.cardMid}>
+                  <Text style={styles.amount}>{whale.amount}</Text>
+                  <Text style={styles.market}> · {whale.market} · </Text>
+                  <View style={[styles.direction, { backgroundColor: whale.direction === 'YES' ? '#0a2a1a' : '#2a0a0a' }]}>
+                    <Text style={[styles.directionText, { color: whale.direction === 'YES' ? '#00c896' : '#ff5555' }]}>{whale.direction}</Text>
+                  </View>
+                </View>
+                <View style={styles.cardBottom}>
+                  <Text style={styles.time}>{whale.time}</Text>
+                  <Text style={[styles.stat, { color: typeColors[whale.type] }]}>{whale.stat}</Text>
+                </View>
+              </TouchableOpacity>
+            ))
+          )}
+          <View style={{ height: 20 }} />
+        </ScrollView>
+      )}
     </View>
   );
 }
@@ -118,6 +127,9 @@ const styles = StyleSheet.create({
   filterText: { fontSize: 12, color: '#555' },
   filterTextActive: { color: '#00c896' },
   feed: { flex: 1, paddingHorizontal: 12 },
+  loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10 },
+  loadingText: { fontSize: 12, color: '#444' },
+  emptyText: { color: '#444', fontSize: 12, textAlign: 'center', marginTop: 40 },
   card: { borderRadius: 14, padding: 12, marginBottom: 8, borderWidth: 0.5 },
   cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
   whaleName: { fontSize: 13, fontWeight: '700', color: '#fff' },
@@ -125,7 +137,7 @@ const styles = StyleSheet.create({
   badgeText: { fontSize: 10, fontWeight: '600' },
   cardMid: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
   amount: { fontSize: 13, fontWeight: '700', color: '#fff' },
-  market: { fontSize: 12, color: '#888' },
+  market: { fontSize: 12, color: '#888', flex: 1 },
   direction: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
   directionText: { fontSize: 10, fontWeight: '700' },
   cardBottom: { flexDirection: 'row', justifyContent: 'space-between' },
