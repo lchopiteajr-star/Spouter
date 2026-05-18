@@ -1,57 +1,7 @@
-// Polymarket public APIs (V2 CLOB client + Gamma)
-// Trade events: clob.polymarket.com/markets/live-activity/{conditionId}  ← V2 path, no auth
-// Markets list: gamma-api.polymarket.com/markets
-//
-// Real-time Trade field names (from real-time-data-client schema — all top-level):
-//   proxyWallet, pseudonym, name, side, size, price, outcome, timestamp,
-//   transactionHash, conditionId, title, slug, eventSlug, asset
+// Polymarket CLOB API — global recent trades, no auth required
 const CLOB_BASE = 'https://clob.polymarket.com';
-const GAMMA_BASE = 'https://gamma-api.polymarket.com';
 
-const WHALE_THRESHOLD_USDC = 5_000;
-
-const SPORTS_KEYWORDS = /soccer|football|nfl|nba|mlb|nhl|champions|premier|world cup|copa|bundesliga|la liga|cricket|tennis|golf|rugby|f1|formula|ufc|boxing|mma|fight|nascar|olympics|super bowl|playoff|tournament|match|game|season|championship/i;
-
-async function fetchTopMarkets(limit = 20) {
-  // Sort by volume descending so the busiest markets come first
-  const url = `${GAMMA_BASE}/markets?active=true&closed=false&limit=${limit}&order=volume&ascending=false`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Gamma markets HTTP ${res.status}`);
-  const data = await res.json();
-  const list = Array.isArray(data) ? data : data.data ?? data.markets ?? [];
-
-  // Filter to sports/UFC markets, fall back to all markets if none match
-  const all = list.filter((m) => m.conditionId || m.condition_id);
-  const sports = all.filter((m) => SPORTS_KEYWORDS.test(m.question ?? m.title ?? ''));
-  const source = sports.length >= 3 ? sports : all;
-
-  console.log(`[Spouter] fetchTopMarkets: ${all.length} total, ${sports.length} sports → using ${source.length}`);
-
-  return source.slice(0, 10).map((m) => ({
-    conditionId: m.conditionId ?? m.condition_id,
-    question: m.question ?? m.title ?? '',
-  }));
-}
-
-// V2 path: /markets/live-activity/{conditionId} — public, no auth
-// Response is an array of Trade objects with flat field names
-async function fetchMarketTradeEvents(conditionId) {
-  const res = await fetch(`${CLOB_BASE}/markets/live-activity/${conditionId}`);
-  if (!res.ok) throw new Error(`Trade events HTTP ${res.status}`);
-  const data = await res.json();
-  return Array.isArray(data) ? data : data.data ?? data.trades ?? [];
-}
-
-// Trade field names per real-time-data-client: size (USDC), price (share price)
-// size here appears to be raw USDC — confirm via debug logs
-function usdcValue(event) {
-  // Try both: raw USDC size field, and shares×price calculation
-  const rawSize = parseFloat(event.size ?? 0);
-  const price = parseFloat(event.price ?? 1);
-  // If price is between 0–1 (share price), size is likely in shares → multiply
-  // If price > 1 or size looks like a dollar amount, use size directly
-  return price > 0 && price <= 1 ? rawSize * price : rawSize;
-}
+const WHALE_THRESHOLD_USDC = 1_000; // start low until we confirm field names
 
 function detectCategory(question = '') {
   const q = question.toLowerCase();
@@ -60,15 +10,6 @@ function detectCategory(question = '') {
   if (/ufc|boxing|fight|mma|canelo|fury/.test(q)) return 'ufc';
   if (/soccer|football|champions|premier|world cup|copa|bundesliga|la liga|nba|nfl|mlb/.test(q)) return 'sports';
   return 'other';
-}
-
-// All fields are top-level in V2: proxyWallet, pseudonym, name, title, etc.
-function displayName(event) {
-  return (
-    event.pseudonym ||
-    event.name ||
-    shortenAddress(event.proxyWallet ?? event.user?.address ?? '')
-  );
 }
 
 function shortenAddress(addr = '') {
@@ -90,16 +31,47 @@ function timeAgo(ts) {
   return `${Math.round(mins / 60)} hr ago`;
 }
 
-function eventToWhale(event, index) {
-  const usdc = usdcValue(event);
-  const outcome = event.outcome ?? 'Yes';
-  const side = (event.side ?? 'BUY').toUpperCase();
+// Called after we confirm field names from logs — maps one trade to a whale card
+function tradeToWhale(trade, index) {
+  // Log first trade so we can confirm every field name
+  if (index === 0) {
+    console.log('[Spouter] tradeToWhale field check:', JSON.stringify(trade));
+  }
+
+  // Try every plausible USDC size field
+  const rawSize = parseFloat(
+    trade.size ?? trade.usdcSize ?? trade.amount ?? trade.notional ?? 0
+  );
+  const price = parseFloat(trade.price ?? 1);
+  // If price looks like a share price (0–1), size is shares → multiply
+  const usdc = price > 0 && price < 1 ? rawSize * price : rawSize;
+
+  // Wallet address — try every known field name
+  const addr =
+    trade.maker_address ?? trade.makerAddress ??
+    trade.owner ?? trade.proxyWallet ??
+    trade.taker ?? '';
+
+  // Display name — pseudonym if present, else shortened address
+  const name = trade.pseudonym ?? trade.name ?? shortenAddress(addr) ?? `Whale #${index + 1}`;
+
+  // Market question — try every nesting
+  const question =
+    trade.title ?? trade.question ??
+    trade.market?.question ?? trade.market?.title ??
+    trade.outcome_title ?? '';
+
+  // Direction from outcome + side
+  const outcome = trade.outcome ?? '';
+  const side = (trade.side ?? 'BUY').toUpperCase();
   const direction =
-    (side === 'BUY' && outcome.startsWith('Y')) || (side === 'SELL' && outcome.startsWith('N'))
+    (side === 'BUY' && outcome.toUpperCase().startsWith('Y')) ||
+    (side === 'SELL' && outcome.toUpperCase().startsWith('N'))
       ? 'YES' : 'NO';
 
-  // V2: market question is top-level 'title'; fall back to nested market.question
-  const question = event.title ?? event.market?.question ?? '';
+  // Timestamp
+  const ts = trade.match_time ?? trade.timestamp ?? trade.created_at ?? trade.matchTime ?? Date.now();
+
   const category = detectCategory(question);
 
   let type = 'active';
@@ -115,22 +87,16 @@ function eventToWhale(event, index) {
   }[category];
 
   return {
-    id: event.transactionHash ?? event.transaction_hash ?? `event-${index}`,
-    name: displayName(event) || `Whale #${index + 1}`,
+    id: trade.id ?? trade.transaction_hash ?? trade.transactionHash ?? `trade-${index}`,
+    name,
     type,
     badge: categoryBadge,
     market: question.slice(0, 42) || 'Unknown market',
     amount: formatUsdc(usdc),
     direction,
-    time: timeAgo(event.timestamp ?? Date.now()),
+    time: timeAgo(ts),
     stat,
-    raw: {
-      addr: event.proxyWallet ?? event.user?.address ?? '',
-      usdc,
-      question,
-      category,
-      direction,
-    },
+    raw: { addr, usdc, question, category, direction },
   };
 }
 
@@ -161,71 +127,97 @@ export const MOCK_WHALES = [
 export async function fetchWhaleActivity() {
   console.log('[Spouter] fetchWhaleActivity START');
   try {
-    console.log('[Spouter] Step 1: fetching markets from Gamma API...');
-    let markets;
+    const url = `${CLOB_BASE}/trades?limit=50`;
+    console.log('[Spouter] Fetching:', url);
+
+    const res = await fetch(url);
+    console.log('[Spouter] HTTP status:', res.status);
+
+    if (!res.ok) {
+      console.log('[Spouter] Non-OK response, going mock');
+      return MOCK_WHALES;
+    }
+
+    const raw = await res.text(); // text first so we can log it even if JSON parse fails
+    console.log('[Spouter] Raw response (first 500 chars):', raw.slice(0, 500));
+
+    let data;
     try {
-      markets = await fetchTopMarkets(8);
+      data = JSON.parse(raw);
     } catch (e) {
-      console.log('[Spouter] Step 1 FAILED:', e.message);
-      return MOCK_WHALES;
-    }
-    console.log('[Spouter] Step 1 OK — markets:', markets.length);
-    console.log('[Spouter] Step 1 sample:', JSON.stringify(markets[0]));
-
-    if (!markets.length) {
-      console.log('[Spouter] Step 1: no markets, going mock');
+      console.log('[Spouter] JSON parse failed:', e.message);
       return MOCK_WHALES;
     }
 
-    console.log('[Spouter] Step 2: fetching /markets/live-activity/ for', markets.length, 'markets...');
-    const eventBatches = await Promise.allSettled(
-      markets.map((m) => fetchMarketTradeEvents(m.conditionId))
-    );
-    eventBatches.forEach((r, i) => {
-      if (r.status === 'fulfilled') {
-        console.log(`[Spouter] Step 2 market[${i}] OK — events: ${r.value.length} | sample:`, JSON.stringify(r.value[0]));
-      } else {
-        console.log(`[Spouter] Step 2 market[${i}] FAILED:`, r.reason?.message);
-      }
+    console.log('[Spouter] Parsed type:', Array.isArray(data) ? 'array' : typeof data);
+    if (!Array.isArray(data)) {
+      console.log('[Spouter] Top-level keys:', Object.keys(data));
+    }
+
+    const trades = Array.isArray(data) ? data : data.data ?? data.trades ?? data.results ?? [];
+    console.log('[Spouter] Trade count:', trades.length);
+
+    if (!trades.length) {
+      console.log('[Spouter] No trades, going mock');
+      return MOCK_WHALES;
+    }
+
+    console.log('[Spouter] First trade keys:', Object.keys(trades[0]));
+    console.log('[Spouter] First trade:', JSON.stringify(trades[0]));
+    console.log('[Spouter] Second trade:', JSON.stringify(trades[1]));
+
+    // Filter for whale-sized trades
+    const whaleEvents = trades.filter((t) => {
+      const rawSize = parseFloat(t.size ?? t.usdcSize ?? t.amount ?? t.notional ?? 0);
+      const price = parseFloat(t.price ?? 1);
+      const usdc = price > 0 && price < 1 ? rawSize * price : rawSize;
+      return usdc >= WHALE_THRESHOLD_USDC;
     });
+    console.log(`[Spouter] Trades >= $${WHALE_THRESHOLD_USDC}: ${whaleEvents.length} / ${trades.length}`);
 
-    const allEvents = eventBatches.flatMap((r) =>
-      r.status === 'fulfilled' ? r.value : []
-    );
-    console.log('[Spouter] Step 2 total events:', allEvents.length);
-
-    if (!allEvents.length) {
-      console.log('[Spouter] Step 2: no events, going mock');
-      return MOCK_WHALES;
-    }
-
-    const sample = allEvents[0];
-    console.log('[Spouter] Step 3 first event keys:', Object.keys(sample));
-    console.log('[Spouter] Step 3 first event:', JSON.stringify(sample));
-    console.log('[Spouter] Step 3 usdcValue(first):', usdcValue(sample));
-
-    const whaleEvents = allEvents.filter((e) => usdcValue(e) >= WHALE_THRESHOLD_USDC);
-    const topUsdc = allEvents.map(usdcValue).sort((a, b) => b - a).slice(0, 5);
-    console.log(`[Spouter] Step 3: ${whaleEvents.length}/${allEvents.length} above $${WHALE_THRESHOLD_USDC} | top 5:`, topUsdc.map((v) => `$${Math.round(v)}`).join(', '));
+    const topUsdc = trades.map((t) => {
+      const rawSize = parseFloat(t.size ?? t.usdcSize ?? t.amount ?? t.notional ?? 0);
+      const price = parseFloat(t.price ?? 1);
+      return price > 0 && price < 1 ? rawSize * price : rawSize;
+    }).sort((a, b) => b - a).slice(0, 5);
+    console.log('[Spouter] Top 5 computed USDC values:', topUsdc.map((v) => `$${Math.round(v)}`).join(', '));
 
     if (!whaleEvents.length) {
-      console.log('[Spouter] Step 3: nothing above threshold, going mock');
+      console.log('[Spouter] Nothing above threshold, going mock');
       return MOCK_WHALES;
     }
 
+    // Deduplicate by maker address, keep biggest per wallet
     const byAddr = new Map();
-    for (const e of whaleEvents) {
-      const addr = e.proxyWallet ?? e.user?.address ?? e.transactionHash ?? `anon-${Math.random()}`;
+    for (const t of whaleEvents) {
+      const addr = t.maker_address ?? t.makerAddress ?? t.owner ?? t.proxyWallet ?? t.taker ?? `anon-${t.id}`;
+      const rawSize = parseFloat(t.size ?? t.usdcSize ?? t.amount ?? 0);
+      const price = parseFloat(t.price ?? 1);
+      const usdc = price > 0 && price < 1 ? rawSize * price : rawSize;
       const existing = byAddr.get(addr);
-      if (!existing || usdcValue(e) > usdcValue(existing)) byAddr.set(addr, e);
+      const existingUsdc = (() => {
+        if (!existing) return 0;
+        const es = parseFloat(existing.size ?? existing.usdcSize ?? existing.amount ?? 0);
+        const ep = parseFloat(existing.price ?? 1);
+        return ep > 0 && ep < 1 ? es * ep : es;
+      })();
+      if (usdc > existingUsdc) byAddr.set(addr, t);
     }
-    console.log('[Spouter] Step 4: unique wallets:', byAddr.size);
+    console.log('[Spouter] Unique wallets:', byAddr.size);
 
     const result = [...byAddr.values()]
-      .sort((a, b) => usdcValue(b) - usdcValue(a))
+      .sort((a, b) => {
+        const calcUsdc = (t) => {
+          const s = parseFloat(t.size ?? t.usdcSize ?? t.amount ?? 0);
+          const p = parseFloat(t.price ?? 1);
+          return p > 0 && p < 1 ? s * p : s;
+        };
+        return calcUsdc(b) - calcUsdc(a);
+      })
       .slice(0, 8)
-      .map(eventToWhale);
-    console.log('[Spouter] Step 5: returning', result.length, 'live whale cards');
+      .map(tradeToWhale);
+
+    console.log('[Spouter] Returning', result.length, 'live whale cards');
     return result;
 
   } catch (err) {
