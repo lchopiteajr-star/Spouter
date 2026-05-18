@@ -1,9 +1,120 @@
 import {
   StyleSheet, Text, View, ScrollView, TouchableOpacity,
-  ActivityIndicator, Animated,
+  ActivityIndicator, Dimensions,
 } from 'react-native';
-import { useState, useEffect, useRef } from 'react';
-import { fetchWhaleProfile, scoreColor } from '../services/polymarket';
+import { useState, useEffect, useCallback } from 'react';
+import Svg, { Polyline, Line, Defs, LinearGradient, Stop, Path } from 'react-native-svg';
+
+const WALLET = '0x8a791620dd6260079bf849dc5567adc3f2fdc318';
+const API    = `https://data-api.polymarket.com/positions?user=${WALLET}&sizeThreshold=.01&limit=200`;
+
+const { width: SCREEN_W } = Dimensions.get('window');
+const CHART_W = SCREEN_W - 32;
+const CHART_H = 140;
+
+// ── Formatters ────────────────────────────────────────────────────────────────
+
+function fmtUsdc(n) {
+  const abs = Math.abs(n);
+  const s   = abs >= 1_000_000 ? `$${(abs / 1_000_000).toFixed(1)}M`
+             : abs >= 1_000    ? `$${(abs / 1_000).toFixed(1)}K`
+             : `$${Math.round(abs)}`;
+  return s;
+}
+
+function fmtPnl(n) {
+  const abs = Math.abs(n);
+  const s   = abs >= 1_000_000 ? `$${(abs / 1_000_000).toFixed(1)}M`
+             : abs >= 1_000    ? `$${(abs / 1_000).toFixed(1)}K`
+             : `$${Math.round(abs)}`;
+  return n >= 0 ? `+${s}` : `-${s}`;
+}
+
+function fmtShares(n) {
+  return n >= 1_000 ? `${(n / 1_000).toFixed(1)}K` : n.toFixed(1);
+}
+
+// ── Process raw API positions ─────────────────────────────────────────────────
+
+function processRaw(raw) {
+  return raw.map((p) => {
+    const avgPrice = parseFloat(p.avgPrice ?? 0);
+    const curPrice = parseFloat(p.curPrice ?? 0);
+    const size     = parseFloat(p.size ?? 0);
+
+    const initialValue  = size * avgPrice;
+    const currentValue  = size * curPrice;
+    const pnl           = currentValue - initialValue;
+    const pnlPct        = initialValue > 0 ? (pnl / initialValue) * 100 : 0;
+
+    const outcome  = (p.outcome ?? '').toLowerCase();
+    const direction = /^(yes|up)/i.test(outcome) ? 'YES' : 'NO';
+
+    return {
+      title:         (p.title ?? p.market?.title ?? 'Unknown market').slice(0, 80),
+      direction,
+      avgCents:      (avgPrice * 100).toFixed(1),
+      curCents:      (curPrice * 100).toFixed(1),
+      shares:        size,
+      sharesDisplay: fmtShares(size),
+      initialValue,
+      currentValue,
+      currentValueDisplay: fmtUsdc(currentValue),
+      pnl,
+      pnlDisplay:    fmtPnl(pnl),
+      pnlPct:        `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%`,
+      positive:      pnl >= 0,
+      redeemable:    p.redeemable === true,
+    };
+  }).sort((a, b) => b.currentValue - a.currentValue);
+}
+
+// ── Simple SVG line chart ─────────────────────────────────────────────────────
+// Plots portfolio value snapshots. If no time-series data is available from the
+// API, we render a synthetic curve shaped by current overall PnL direction.
+
+function PnlChart({ totalPnl }) {
+  // Generate 30 synthetic points ending at the current PnL direction.
+  // A real implementation would replace this with a /portfolio/value API call.
+  const trend  = totalPnl >= 0 ? 1 : -1;
+  const points = Array.from({ length: 30 }, (_, i) => {
+    const t     = i / 29;
+    const noise = (Math.sin(i * 2.3) * 0.15 + Math.cos(i * 1.7) * 0.1);
+    return 0.5 + trend * t * 0.35 + noise * (1 - t * 0.5);
+  });
+
+  const minV  = Math.min(...points);
+  const maxV  = Math.max(...points);
+  const range = maxV - minV || 1;
+  const pad   = 8;
+
+  const coords = points.map((v, i) => {
+    const x = pad + (i / (points.length - 1)) * (CHART_W - pad * 2);
+    const y = CHART_H - pad - ((v - minV) / range) * (CHART_H - pad * 2);
+    return `${x},${y}`;
+  });
+
+  const polyStr = coords.join(' ');
+  const color   = totalPnl >= 0 ? '#00c896' : '#ff5555';
+
+  // Filled area path: trace the line then go back along bottom
+  const firstPt = coords[0].split(',');
+  const lastPt  = coords[coords.length - 1].split(',');
+  const areaD   = `M ${polyStr.replace(/,/g, ' ').replace(/ (?=\d)/g, ' L ')} L ${lastPt[0]} ${CHART_H - pad} L ${firstPt[0]} ${CHART_H - pad} Z`;
+
+  return (
+    <Svg width={CHART_W} height={CHART_H}>
+      <Defs>
+        <LinearGradient id="grad" x1="0" y1="0" x2="0" y2="1">
+          <Stop offset="0" stopColor={color} stopOpacity="0.25" />
+          <Stop offset="1" stopColor={color} stopOpacity="0" />
+        </LinearGradient>
+      </Defs>
+      <Path d={areaD} fill="url(#grad)" />
+      <Polyline points={polyStr} fill="none" stroke={color} strokeWidth="1.5" />
+    </Svg>
+  );
+}
 
 // ── Direction chip ────────────────────────────────────────────────────────────
 
@@ -18,14 +129,10 @@ function DirChip({ direction }) {
   );
 }
 
-// ── Position card (polymarket.com style) ──────────────────────────────────────
+// ── Position row ──────────────────────────────────────────────────────────────
 
 function PositionRow({ pos, isLast }) {
-  const isOpen   = pos.status === 'OPEN' || pos.status === null;
-  const isWon    = pos.status === 'WON';
-  const isLost   = pos.status === 'LOST';
-  const positive = pos.cashPnlRaw >= 0;
-  const pnlColor = positive ? '#00c896' : '#ff5555';
+  const pnlColor = pos.positive ? '#00c896' : '#ff5555';
 
   return (
     <View style={[styles.posRow, isLast && styles.posRowLast]}>
@@ -33,298 +140,242 @@ function PositionRow({ pos, isLast }) {
       {/* Market title */}
       <Text style={styles.posTitle} numberOfLines={2}>{pos.title}</Text>
 
-      {/* Direction + price line */}
-      <View style={styles.posPriceRow}>
+      {/* Direction + shares */}
+      <View style={styles.posMeta}>
         <DirChip direction={pos.direction} />
-        {pos.avgPriceCents != null && (
-          <Text style={styles.priceDetail}>Avg: {pos.avgPriceCents}¢</Text>
-        )}
-        {pos.curPriceCents != null && (
-          <Text style={styles.priceDetail}>Now: {pos.curPriceCents}¢</Text>
-        )}
-        {pos.currentValue && (
-          <Text style={styles.priceValue}>{pos.currentValue}</Text>
-        )}
+        <Text style={styles.posShares}>{pos.sharesDisplay} shares</Text>
       </View>
 
-      {/* PnL line */}
-      <View style={styles.posPnlRow}>
-        {isOpen && pos.cashPnlRaw !== 0 && (
-          <Text style={[styles.posPnl, { color: pnlColor }]}>
-            {pos.cashPnl} ({pos.pctDisplay})
+      {/* Price / value / PnL detail row */}
+      <View style={styles.posDetail}>
+        <View style={styles.posDetailItem}>
+          <Text style={styles.posDetailLabel}>Avg</Text>
+          <Text style={styles.posDetailVal}>{pos.avgCents}¢</Text>
+        </View>
+        <Text style={styles.posDivider}>·</Text>
+        <View style={styles.posDetailItem}>
+          <Text style={styles.posDetailLabel}>Now</Text>
+          <Text style={styles.posDetailVal}>{pos.curCents}¢</Text>
+        </View>
+        <Text style={styles.posDivider}>·</Text>
+        <View style={styles.posDetailItem}>
+          <Text style={styles.posDetailLabel}>Value</Text>
+          <Text style={styles.posDetailVal}>{pos.currentValueDisplay}</Text>
+        </View>
+        <View style={[styles.pnlChip, { backgroundColor: pos.positive ? '#0a2a1a' : '#2a0a0a' }]}>
+          <Text style={[styles.pnlChipText, { color: pnlColor }]}>
+            {pos.pnlDisplay} ({pos.pnlPct})
           </Text>
-        )}
-        {isWon && (
-          <>
-            <Text style={styles.statusWon}>WON</Text>
-            {pos.cashPnlRaw !== 0 && (
-              <Text style={[styles.posPnl, { color: pnlColor, marginLeft: 6 }]}>{pos.cashPnl}</Text>
-            )}
-          </>
-        )}
-        {isLost && (
-          <>
-            <Text style={styles.statusLost}>LOST</Text>
-            {pos.cashPnlRaw !== 0 && (
-              <Text style={[styles.posPnl, { color: pnlColor, marginLeft: 6 }]}>{pos.cashPnl}</Text>
-            )}
-          </>
-        )}
-        {isOpen && pos.cashPnlRaw === 0 && (
-          <Text style={styles.statusOpen}>OPEN · no change</Text>
-        )}
+        </View>
       </View>
-    </View>
-  );
-}
-
-// ── Header stat box ───────────────────────────────────────────────────────────
-
-function StatBox({ label, value, color = '#fff', small = false }) {
-  return (
-    <View style={styles.statBox}>
-      <Text style={[styles.statVal, { color, fontSize: small ? 14 : 18 }]} numberOfLines={1}>
-        {value ?? '—'}
-      </Text>
-      <Text style={styles.statLabel}>{label}</Text>
     </View>
   );
 }
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
+const TIME_TABS = ['1D', '1W', '1M', '1Y', 'YTD', 'ALL'];
+
 export default function WhaleProfileScreen({ route, navigation }) {
-  const whale = route?.params?.whale ?? {};
-  const addr  = whale.raw?.addr ?? '';
+  const [positions,  setPositions]  = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [error,      setError]      = useState(null);
+  const [activeTab,  setActiveTab]  = useState('ALL');
 
-  const [profile, setProfile] = useState(null);
-  const [loading, setLoading] = useState(!!addr);
-  const [error,   setError]   = useState(null);
-
-  const headerAnim = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    Animated.timing(headerAnim, { toValue: 1, duration: 400, useNativeDriver: true }).start();
+  const load = useCallback(async () => {
+    try {
+      setError(null);
+      const res  = await fetch(API);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const raw  = Array.isArray(data) ? data : data.data ?? data.positions ?? [];
+      setPositions(processRaw(raw));
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  useEffect(() => {
-    if (!addr) return;
-    fetchWhaleProfile(addr)
-      .then(setProfile)
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, [addr]);
+  useEffect(() => { load(); }, [load]);
 
-  const accentColor = { active: '#00c896', ghost: '#00aaff', dormant: '#a07fff', consensus: '#7fff9b' }[whale.type] ?? '#00c896';
-  const avatarBg    = { active: '#0a2a1a', ghost: '#0b1220', dormant: '#0c0a18', consensus: '#0a1408' }[whale.type] ?? '#0a2a1a';
-  const rankLabel   = { active: 'A', ghost: 'G', dormant: 'D', consensus: 'C' }[whale.type] ?? 'W';
+  // ── Aggregate stats ──────────────────────────────────────────────────────
+  const totalValue  = positions.reduce((s, p) => s + p.currentValue, 0);
+  const totalPnl    = positions.reduce((s, p) => s + p.pnl, 0);
+  const biggestWin  = positions.reduce((best, p) => p.pnl > best ? p.pnl : best, 0);
+  const pnlPositive = totalPnl >= 0;
+  const pnlColor    = pnlPositive ? '#00c896' : '#ff5555';
 
-  const displayName = profile?.pseudonym ?? whale.name ?? 'Unknown Whale';
-  const shortAddr   = addr.length >= 10 ? `${addr.slice(0, 6)}…${addr.slice(-4)}` : addr;
-
-  const score    = profile?.score ?? whale.score ?? null;
-  const sc       = scoreColor(score ?? 1);
-  const pnlValue = profile?.totalCashPnl ?? null;
-  const pnlPos   = pnlValue?.startsWith('+');
+  const shortAddr = `${WALLET.slice(0, 6)}…${WALLET.slice(-4)}`;
 
   return (
     <View style={styles.container}>
       <ScrollView showsVerticalScrollIndicator={false}>
 
-        {/* Back */}
-        <View style={styles.headerNav}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-            <Text style={[styles.backText, { color: accentColor }]}>← Back</Text>
+        {/* Nav */}
+        <View style={styles.nav}>
+          <TouchableOpacity onPress={() => navigation.goBack()}>
+            <Text style={styles.back}>← Back</Text>
           </TouchableOpacity>
         </View>
 
-        {/* Profile header */}
-        <Animated.View style={[styles.profileTop, { opacity: headerAnim }]}>
-          <View style={[styles.avatar, { backgroundColor: avatarBg, borderColor: accentColor + '44', borderWidth: 1 }]}>
-            <Text style={[styles.avatarText, { color: accentColor }]}>{rankLabel}</Text>
+        {/* Profile identity */}
+        <View style={styles.identity}>
+          <View style={styles.avatarRing}>
+            <Text style={styles.avatarLetter}>A</Text>
           </View>
-
-          <View style={styles.nameBlock}>
-            <Text style={styles.whaleName}>{displayName}</Text>
-            {shortAddr ? <Text style={styles.walletAddr}>{shortAddr}</Text> : null}
-            <Text style={styles.whaleStatus}>
-              {whale.time ? `Last bet ${whale.time}` : 'Polymarket whale'}
-            </Text>
-            {profile?.memberSince ? (
-              <Text style={styles.memberSince}>Member since {profile.memberSince}</Text>
-            ) : null}
+          <View>
+            <Text style={styles.handle}>anoin123</Text>
+            <Text style={styles.addr}>{shortAddr}</Text>
           </View>
+        </View>
 
-          <View style={styles.scoreBlock}>
-            {score !== null && (
-              <View style={[styles.scoreBadge, { backgroundColor: sc + '22', borderColor: sc + '55' }]}>
-                <Text style={[styles.scoreNum, { color: sc }]}>{score}</Text>
-                <Text style={[styles.scoreLabel, { color: sc }]}>score</Text>
-              </View>
-            )}
-          </View>
-        </Animated.View>
-
-        {/* Latest trade from feed */}
-        {whale.market && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Latest trade</Text>
-            <View style={[styles.latestBox, { borderColor: accentColor + '33' }]}>
-              <Text style={styles.latestMarket}>{whale.market}</Text>
-              <View style={styles.latestRow}>
-                <DirChip direction={whale.direction} />
-                <Text style={[styles.latestAmount, { color: accentColor }]}>{whale.amount}</Text>
-                {whale.eventDate && <Text style={styles.latestDate}>{whale.eventDate}</Text>}
-              </View>
-            </View>
-          </View>
-        )}
-
-        {/* Profile data */}
         {loading ? (
-          <View style={styles.loadingWrap}>
-            <ActivityIndicator color={accentColor} />
-            <Text style={styles.loadingText}>Loading positions…</Text>
+          <View style={styles.center}>
+            <ActivityIndicator color="#00c896" size="large" />
+            <Text style={styles.loadingText}>Fetching positions…</Text>
           </View>
         ) : error ? (
-          <View style={styles.stateWrap}>
-            <Text style={styles.stateEmoji}>📡</Text>
-            <Text style={styles.stateText}>Could not load profile.</Text>
+          <View style={styles.center}>
+            <Text style={styles.errorEmoji}>📡</Text>
+            <Text style={styles.errorText}>Could not load positions.</Text>
+            <Text style={styles.errorSub}>{error}</Text>
+            <TouchableOpacity style={styles.retryBtn} onPress={load}>
+              <Text style={styles.retryText}>Retry</Text>
+            </TouchableOpacity>
           </View>
-        ) : !profile ? null : (
+        ) : (
           <>
-            {/* Stats: total open value · biggest win · predictions · all-time PnL */}
-            <View style={styles.statsGrid}>
-              <StatBox
-                label="Open positions value"
-                value={profile.totalOpenValue ?? '—'}
-                color={accentColor}
-              />
-              <StatBox
-                label="Biggest win"
-                value={profile.biggestWin ?? '—'}
-                color="#00c896"
-              />
-              <StatBox
-                label="Total predictions"
-                value={profile.totalPredictions != null ? String(profile.totalPredictions) : '—'}
-                color={accentColor}
-              />
-              <StatBox
-                label="All-time PnL"
-                value={pnlValue ?? '—'}
-                color={pnlValue ? (pnlPos ? '#00c896' : '#ff5555') : '#555'}
-              />
+            {/* ── 4-stat header ─────────────────────────────────────────── */}
+            <View style={styles.statsRow}>
+              <View style={styles.statBox}>
+                <Text style={styles.statVal}>{fmtUsdc(totalValue)}</Text>
+                <Text style={styles.statLabel}>Positions Value</Text>
+              </View>
+              <View style={[styles.statBox, styles.statBoxMid]}>
+                <Text style={[styles.statVal, { color: '#00c896' }]}>
+                  {biggestWin > 0 ? fmtUsdc(biggestWin) : '—'}
+                </Text>
+                <Text style={styles.statLabel}>Biggest Win</Text>
+              </View>
+              <View style={styles.statBox}>
+                <Text style={styles.statVal}>{positions.length}</Text>
+                <Text style={styles.statLabel}>Predictions</Text>
+              </View>
             </View>
 
-            {/* W/L/O summary bar */}
-            {(profile.wins > 0 || profile.losses > 0) && (
-              <View style={styles.wlBar}>
-                <Text style={styles.wlWin}>{profile.wins}W</Text>
-                <Text style={styles.wlSep}> · </Text>
-                <Text style={styles.wlLoss}>{profile.losses}L</Text>
-                {profile.opens > 0 && (
-                  <>
-                    <Text style={styles.wlSep}> · </Text>
-                    <Text style={styles.wlOpen}>{profile.opens} open</Text>
-                  </>
-                )}
-              </View>
-            )}
+            {/* ── PnL + time filter ─────────────────────────────────────── */}
+            <View style={styles.pnlSection}>
+              <Text style={[styles.pnlBig, { color: pnlColor }]}>{fmtPnl(totalPnl)}</Text>
+              <Text style={styles.pnlSub}>Profit / Loss</Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.tabsScroll}
+                contentContainerStyle={styles.tabsRow}
+              >
+                {TIME_TABS.map((t) => (
+                  <TouchableOpacity
+                    key={t}
+                    style={[styles.timeTab, activeTab === t && styles.timeTabActive]}
+                    onPress={() => setActiveTab(t)}
+                  >
+                    <Text style={[styles.timeTabText, activeTab === t && { color: '#fff' }]}>{t}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
 
-            {/* Positions list */}
-            {profile.positions?.length > 0 ? (
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>
-                  Positions ({profile.positions.length})
-                </Text>
-                <View style={styles.positionsBox}>
-                  {profile.positions.map((p, i) => (
-                    <PositionRow
-                      key={i}
-                      pos={p}
-                      isLast={i === profile.positions.length - 1}
-                    />
-                  ))}
-                </View>
+            {/* ── Chart ────────────────────────────────────────────────── */}
+            <View style={styles.chartWrap}>
+              <PnlChart totalPnl={totalPnl} />
+            </View>
+
+            {/* ── Positions list ────────────────────────────────────────── */}
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>
+                Positions · {positions.length}
+              </Text>
+              <View style={styles.positionsBox}>
+                {positions.map((pos, i) => (
+                  <PositionRow
+                    key={i}
+                    pos={pos}
+                    isLast={i === positions.length - 1}
+                  />
+                ))}
               </View>
-            ) : (
-              <View style={styles.stateWrap}>
-                <Text style={styles.stateEmoji}>📭</Text>
-                <Text style={styles.stateText}>No positions found.</Text>
-              </View>
-            )}
+            </View>
           </>
         )}
 
-        <View style={{ height: 40 }} />
+        <View style={{ height: 60 }} />
       </ScrollView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container:    { flex: 1, backgroundColor: '#0a0a0a' },
-  headerNav:    { paddingTop: 60, paddingHorizontal: 16, paddingBottom: 8 },
-  backBtn:      { alignSelf: 'flex-start' },
-  backText:     { fontSize: 14 },
+  container:     { flex: 1, backgroundColor: '#080808' },
 
-  profileTop:   { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingHorizontal: 16, marginBottom: 20 },
-  avatar:       { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', marginTop: 2 },
-  avatarText:   { fontSize: 16, fontWeight: '800' },
+  nav:           { paddingTop: 60, paddingHorizontal: 16, paddingBottom: 12 },
+  back:          { fontSize: 14, color: '#00c896' },
 
-  nameBlock:    { flex: 1 },
-  whaleName:    { fontSize: 20, fontWeight: '800', color: '#fff' },
-  walletAddr:   { fontSize: 10, color: '#444', marginTop: 2, fontFamily: 'monospace' },
-  whaleStatus:  { fontSize: 11, color: '#555', marginTop: 4 },
-  memberSince:  { fontSize: 10, color: '#444', marginTop: 2 },
+  identity:      { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, marginBottom: 24 },
+  avatarRing:    { width: 48, height: 48, borderRadius: 24, backgroundColor: '#0a2a1a', borderWidth: 1.5, borderColor: '#00c89688', alignItems: 'center', justifyContent: 'center' },
+  avatarLetter:  { fontSize: 18, fontWeight: '800', color: '#00c896' },
+  handle:        { fontSize: 18, fontWeight: '800', color: '#fff' },
+  addr:          { fontSize: 11, color: '#444', marginTop: 2, fontFamily: 'monospace' },
 
-  scoreBlock:   { alignItems: 'flex-end' },
-  scoreBadge:   { alignItems: 'center', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, borderWidth: 0.5 },
-  scoreNum:     { fontSize: 22, fontWeight: '800', lineHeight: 26 },
-  scoreLabel:   { fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.5 },
+  // Stats
+  statsRow:      { flexDirection: 'row', paddingHorizontal: 16, marginBottom: 24, gap: 8 },
+  statBox:       { flex: 1, backgroundColor: '#111', borderRadius: 12, padding: 12, borderWidth: 0.5, borderColor: '#1e1e1e' },
+  statBoxMid:    { flex: 1 },
+  statVal:       { fontSize: 16, fontWeight: '800', color: '#fff' },
+  statLabel:     { fontSize: 10, color: '#444', marginTop: 3 },
 
-  section:         { paddingHorizontal: 16, marginBottom: 16 },
-  sectionTitle:    { fontSize: 11, color: '#444', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 },
+  // PnL
+  pnlSection:    { paddingHorizontal: 16, marginBottom: 12 },
+  pnlBig:        { fontSize: 34, fontWeight: '800' },
+  pnlSub:        { fontSize: 11, color: '#444', marginTop: 2, marginBottom: 12 },
+  tabsScroll:    { flexGrow: 0 },
+  tabsRow:       { flexDirection: 'row', gap: 6 },
+  timeTab:       { paddingHorizontal: 14, paddingVertical: 5, borderRadius: 20, borderWidth: 0.5, borderColor: '#333' },
+  timeTabActive: { backgroundColor: '#1a1a1a', borderColor: '#555' },
+  timeTabText:   { fontSize: 12, fontWeight: '600', color: '#555' },
 
-  latestBox:    { backgroundColor: '#131313', borderRadius: 12, padding: 12, borderWidth: 0.5 },
-  latestMarket: { fontSize: 13, color: '#ccc', marginBottom: 8 },
-  latestRow:    { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  latestAmount: { fontSize: 16, fontWeight: '800' },
-  latestDate:   { fontSize: 11, color: '#555', marginLeft: 'auto' },
+  // Chart
+  chartWrap:     { paddingHorizontal: 16, marginBottom: 24 },
 
-  statsGrid:    { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16, marginBottom: 12 },
-  statBox:      { backgroundColor: '#131313', borderRadius: 10, padding: 10, borderWidth: 0.5, borderColor: '#1e1e1e', width: '47%' },
-  statVal:      { fontWeight: '800' },
-  statLabel:    { fontSize: 10, color: '#444', marginTop: 2 },
+  // Positions
+  section:       { paddingHorizontal: 16, marginBottom: 16 },
+  sectionTitle:  { fontSize: 11, color: '#444', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 },
+  positionsBox:  { backgroundColor: '#111', borderRadius: 14, borderWidth: 0.5, borderColor: '#1e1e1e', overflow: 'hidden' },
 
-  wlBar:        { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, marginBottom: 16 },
-  wlWin:        { fontSize: 13, fontWeight: '800', color: '#00c896' },
-  wlLoss:       { fontSize: 13, fontWeight: '800', color: '#ff5555' },
-  wlOpen:       { fontSize: 13, color: '#555' },
-  wlSep:        { fontSize: 13, color: '#333' },
+  posRow:        { paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a', gap: 6 },
+  posRowLast:    { borderBottomWidth: 0 },
+  posTitle:      { fontSize: 13, color: '#ddd', fontWeight: '600', lineHeight: 18 },
 
-  positionsBox: { backgroundColor: '#131313', borderRadius: 12, borderWidth: 0.5, borderColor: '#1e1e1e', overflow: 'hidden' },
+  posMeta:       { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  dirChip:       { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 4 },
+  dirText:       { fontSize: 11, fontWeight: '800' },
+  posShares:     { fontSize: 11, color: '#555' },
 
-  posRow:       { paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a', gap: 5 },
-  posRowLast:   { borderBottomWidth: 0 },
-  posTitle:     { fontSize: 12, color: '#ccc', lineHeight: 16 },
+  posDetail:     { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 2 },
+  posDetailItem: { alignItems: 'flex-start' },
+  posDetailLabel:{ fontSize: 9, color: '#444', textTransform: 'uppercase' },
+  posDetailVal:  { fontSize: 12, color: '#aaa', fontWeight: '600' },
+  posDivider:    { fontSize: 12, color: '#333' },
 
-  posPriceRow:  { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
-  dirChip:      { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 4 },
-  dirText:      { fontSize: 10, fontWeight: '800' },
-  priceDetail:  { fontSize: 10, color: '#666' },
-  priceValue:   { fontSize: 11, color: '#aaa', fontWeight: '700', marginLeft: 'auto' },
+  pnlChip:       { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, marginLeft: 'auto' },
+  pnlChipText:   { fontSize: 12, fontWeight: '800' },
 
-  posPnlRow:    { flexDirection: 'row', alignItems: 'center' },
-  posPnl:       { fontSize: 12, fontWeight: '700' },
-  statusWon:    { fontSize: 11, fontWeight: '800', color: '#00c896' },
-  statusLost:   { fontSize: 11, fontWeight: '800', color: '#ff5555' },
-  statusOpen:   { fontSize: 10, color: '#444' },
-
-  loadingWrap:  { alignItems: 'center', justifyContent: 'center', paddingVertical: 40, gap: 10 },
-  loadingText:  { fontSize: 12, color: '#444' },
-  stateWrap:    { alignItems: 'center', paddingVertical: 32, gap: 8 },
-  stateEmoji:   { fontSize: 28 },
-  stateText:    { fontSize: 12, color: '#555' },
+  // States
+  center:        { alignItems: 'center', justifyContent: 'center', paddingVertical: 80, gap: 10 },
+  loadingText:   { fontSize: 13, color: '#444', marginTop: 8 },
+  errorEmoji:    { fontSize: 32 },
+  errorText:     { fontSize: 14, color: '#ccc', fontWeight: '700' },
+  errorSub:      { fontSize: 11, color: '#444' },
+  retryBtn:      { marginTop: 8, paddingHorizontal: 20, paddingVertical: 8, borderRadius: 8, borderWidth: 0.5, borderColor: '#00c896' },
+  retryText:     { color: '#00c896', fontSize: 13, fontWeight: '600' },
 });
