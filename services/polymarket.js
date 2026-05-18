@@ -4,6 +4,7 @@
 //   proxyWallet, pseudonym, name, side, size (shares), price ($/share),
 //   timestamp (unix secs), title, outcome, outcomeIndex, transactionHash, conditionId
 const DATA_API_BASE = 'https://data-api.polymarket.com';
+const GAMMA_API_BASE = 'https://gamma-api.polymarket.com';
 
 const WHALE_MIN_USDC = 10_000;
 
@@ -62,6 +63,32 @@ function formatBet(outcome, category) {
   return outcome;
 }
 
+function formatEventDate(isoString) {
+  if (!isoString) return null;
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return null;
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  } catch (_) { return null; }
+}
+
+function extractDateFromTitle(title = '') {
+  // ISO date embedded in title
+  const iso = title.match(/\b(\d{4}-\d{2}-\d{2})\b/);
+  if (iso) return formatEventDate(iso[1]);
+
+  // "May 17" or "May 17, 2026" — return formatted directly
+  const mdy = title.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:,?\s*\d{4})?/i);
+  if (mdy) {
+    const month = MONTH_MAP[mdy[1].toLowerCase().slice(0, 3)];
+    const day = parseInt(mdy[2]);
+    const d = new Date(new Date().getFullYear(), month, day);
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
+  return null;
+}
+
 // size = shares, price = $/share → USDC = size × price (confirmed from logs)
 function extractUsdc(trade) {
   return parseFloat(trade.size ?? 0) * parseFloat(trade.price ?? 0);
@@ -85,29 +112,43 @@ function timeAgo(unixSecs) {
   return `${Math.round(mins / 60)} hr ago`;
 }
 
-// ── Fetch whale trades ────────────────────────────────────────────────────────
+// ── Gamma API: batch fetch active markets ────────────────────────────────────
+// Returns Map<conditionId, { endDate, ... }> — only includes active+open markets.
+// If the Gamma call fails entirely, returns null so callers can skip filtering.
 
-async function fetchWhaleTrades() {
-  // filterType=CASH&filterAmount=N → server returns only trades ≥ $N USDC
-  // takerOnly=true (default) — only completed trades, no open orders
-  const url = `${DATA_API_BASE}/trades?filterType=CASH&filterAmount=${WHALE_MIN_USDC}&limit=100`;
-  console.log('[Spouter] Fetching:', url);
-  const res = await fetch(url);
-  console.log('[Spouter] HTTP status:', res.status);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
-  const trades = Array.isArray(data) ? data : data.data ?? data.trades ?? [];
-  console.log('[Spouter] Trades returned:', trades.length);
-  if (trades[0]) {
-    console.log('[Spouter] First trade:', JSON.stringify(trades[0]));
-    console.log('[Spouter] Top 5 USDC:', trades.slice(0, 5).map((t) => `$${Math.round(extractUsdc(t))}`).join(', '));
+async function fetchGammaMarkets(conditionIds) {
+  if (!conditionIds.length) return new Map();
+
+  // Gamma supports comma-separated conditionIds in one request
+  const CHUNK = 20;
+  const marketMap = new Map();
+
+  for (let i = 0; i < conditionIds.length; i += CHUNK) {
+    const ids = conditionIds.slice(i, i + CHUNK).join(',');
+    const url = `${GAMMA_API_BASE}/markets?conditionIds=${ids}&active=true&closed=false`;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) {
+        console.log('[Spouter] Gamma HTTP', res.status, '— skipping chunk');
+        continue;
+      }
+      const data = await res.json();
+      const list = Array.isArray(data) ? data : data.data ?? data.markets ?? [];
+      for (const m of list) {
+        const cid = m.conditionId ?? m.condition_id;
+        if (cid) marketMap.set(cid, m);
+      }
+    } catch (err) {
+      console.log('[Spouter] Gamma chunk error:', err.message);
+    }
   }
-  return trades;
+
+  return marketMap;
 }
 
 // ── Map trade → whale card ────────────────────────────────────────────────────
 
-function tradeToWhale(trade, index) {
+function tradeToWhale(trade, index, gammaMarket = null) {
   const usdc = extractUsdc(trade);
   const question = trade.title ?? '';
   const category = detectCategory(question);
@@ -119,6 +160,9 @@ function tradeToWhale(trade, index) {
   // direction drives chip color; YES = green for Yes/Up/team picks, NO = red for No/Down
   const direction = /^(yes|up)/i.test(rawOutcome) ? 'YES' : 'NO';
   const bet = formatBet(rawOutcome, category);
+
+  // Event date: prefer Gamma endDate, fall back to parsing the title
+  const eventDate = formatEventDate(gammaMarket?.endDate ?? gammaMarket?.end_date) ?? extractDateFromTitle(question);
 
   let type = 'dormant';
   let stat = 'Whale bet';
@@ -141,6 +185,7 @@ function tradeToWhale(trade, index) {
     amount: formatUsdc(usdc),
     direction,
     bet,
+    eventDate,
     time: timeAgo(trade.timestamp),
     stat,
     raw: { addr, usdc, question, category, direction },
@@ -150,10 +195,10 @@ function tradeToWhale(trade, index) {
 // ── Mock fallback ─────────────────────────────────────────────────────────────
 
 export const MOCK_WHALES = [
-  { id: 1, name: 'Whale #3', type: 'active', badge: '⚽ Sports', market: 'Brazil World Cup', amount: '$280K', direction: 'YES', time: '2 min ago', stat: 'Large position', raw: { category: 'sports' } },
-  { id: 2, name: 'Ghost wallet', type: 'ghost', badge: '📊 Market', market: 'Chimaev to win', amount: '$500K', direction: 'YES', time: '8 min ago', stat: 'Big bet', raw: { category: 'other' } },
-  { id: 3, name: 'Whale #7', type: 'dormant', badge: '🏛 Politics', market: 'Trump 2026 midterms', amount: '$900K', direction: 'NO', time: '22 min ago', stat: 'Whale bet', raw: { category: 'politics' } },
-  { id: 4, name: 'BTC Caller', type: 'consensus', badge: '⚡ Crypto', market: 'BTC > $100K by EOY', amount: '$1.8M', direction: 'YES', time: '1 hr ago', stat: 'Mega move', raw: { category: 'crypto' } },
+  { id: 1, name: 'Whale #3', type: 'active', badge: '⚽ Sports', market: 'Brazil World Cup', amount: '$280K', direction: 'YES', bet: 'Brazil to win', eventDate: 'Jun 14', time: '2 min ago', stat: 'Large position', raw: { category: 'sports' } },
+  { id: 2, name: 'Ghost wallet', type: 'ghost', badge: '📊 Market', market: 'Chimaev to win', amount: '$500K', direction: 'YES', bet: 'Yes', eventDate: null, time: '8 min ago', stat: 'Big bet', raw: { category: 'other' } },
+  { id: 3, name: 'Whale #7', type: 'dormant', badge: '🏛 Politics', market: 'Trump 2026 midterms', amount: '$900K', direction: 'NO', bet: 'No', eventDate: 'Nov 3', time: '22 min ago', stat: 'Whale bet', raw: { category: 'politics' } },
+  { id: 4, name: 'BTC Caller', type: 'consensus', badge: '⚡ Crypto', market: 'BTC > $100K by EOY', amount: '$1.8M', direction: 'YES', bet: 'Yes', eventDate: 'Dec 31', time: '1 hr ago', stat: 'Mega move', raw: { category: 'crypto' } },
 ];
 
 // ── Main export ───────────────────────────────────────────────────────────────
@@ -168,18 +213,13 @@ export async function fetchWhaleActivity() {
       return MOCK_WHALES;
     }
 
-    // Filter out markets with dates that have already passed
-    const activeTrades = trades.filter((t) => !isPastMarket(t.title ?? ''));
-    console.log('[Spouter] After past-market filter:', activeTrades.length, '/', trades.length);
-
-    if (!activeTrades.length) {
-      console.log('[Spouter] All trades filtered out, going mock');
-      return MOCK_WHALES;
-    }
+    // Cheap pre-filter: drop markets whose title contains a past date
+    const datePassed = trades.filter((t) => !isPastMarket(t.title ?? ''));
+    console.log('[Spouter] After past-market filter:', datePassed.length, '/', trades.length);
 
     // Deduplicate by wallet — keep largest trade per address
     const byAddr = new Map();
-    for (const t of activeTrades) {
+    for (const t of datePassed) {
       const addr = t.proxyWallet ?? t.transactionHash ?? `anon-${Math.random()}`;
       const usdc = extractUsdc(t);
       if (!byAddr.has(addr) || usdc > extractUsdc(byAddr.get(addr))) {
@@ -188,10 +228,31 @@ export async function fetchWhaleActivity() {
     }
     console.log('[Spouter] Unique wallets:', byAddr.size);
 
-    const result = [...byAddr.values()]
+    // Take top 20 candidates before the Gamma network call (more than 8 since some may be filtered)
+    const candidates = [...byAddr.values()]
       .sort((a, b) => extractUsdc(b) - extractUsdc(a))
+      .slice(0, 20);
+
+    // Batch-check Gamma: keep only active+open markets, grab endDate
+    const conditionIds = [...new Set(candidates.map((t) => t.conditionId).filter(Boolean))];
+    console.log('[Spouter] Gamma check for', conditionIds.length, 'conditionIds');
+    const gammaMap = await fetchGammaMarkets(conditionIds);
+    console.log('[Spouter] Active markets from Gamma:', gammaMap.size);
+
+    // If Gamma returned results, filter to active-only; otherwise keep all (graceful degradation)
+    const live = gammaMap.size > 0
+      ? candidates.filter((t) => t.conditionId && gammaMap.has(t.conditionId))
+      : candidates;
+    console.log('[Spouter] Candidates after Gamma filter:', live.length);
+
+    if (!live.length) {
+      console.log('[Spouter] No live candidates, going mock');
+      return MOCK_WHALES;
+    }
+
+    const result = live
       .slice(0, 8)
-      .map(tradeToWhale);
+      .map((t, i) => tradeToWhale(t, i, gammaMap.get(t.conditionId) ?? null));
 
     console.log('[Spouter] Returning', result.length, 'live whale cards');
     return result;
@@ -200,4 +261,24 @@ export async function fetchWhaleActivity() {
     console.log('[Spouter] ERROR:', err.message);
     return MOCK_WHALES;
   }
+}
+
+// ── Fetch whale trades ────────────────────────────────────────────────────────
+
+async function fetchWhaleTrades() {
+  // filterType=CASH&filterAmount=N → server returns only trades ≥ $N USDC
+  // takerOnly=true (default) — only completed trades, no open orders
+  const url = `${DATA_API_BASE}/trades?filterType=CASH&filterAmount=${WHALE_MIN_USDC}&limit=100`;
+  console.log('[Spouter] Fetching:', url);
+  const res = await fetch(url);
+  console.log('[Spouter] HTTP status:', res.status);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  const trades = Array.isArray(data) ? data : data.data ?? data.trades ?? [];
+  console.log('[Spouter] Trades returned:', trades.length);
+  if (trades[0]) {
+    console.log('[Spouter] First trade:', JSON.stringify(trades[0]));
+    console.log('[Spouter] Top 5 USDC:', trades.slice(0, 5).map((t) => `$${Math.round(extractUsdc(t))}`).join(', '));
+  }
+  return trades;
 }

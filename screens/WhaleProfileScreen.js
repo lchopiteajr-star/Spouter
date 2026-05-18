@@ -107,6 +107,9 @@ export default function WhaleProfileScreen({ route, navigation }) {
                   <Text style={[styles.dirText, { color: whale.direction === 'YES' ? '#00c896' : '#ff5555' }]}>{whale.direction}</Text>
                 </View>
                 <Text style={[styles.positionAmount, { color: accentColor }]}>{whale.amount}</Text>
+                {whale.eventDate && (
+                  <Text style={styles.positionDate}>{whale.eventDate}</Text>
+                )}
               </View>
             </View>
           </View>
@@ -200,6 +203,7 @@ const styles = StyleSheet.create({
   dirChip: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
   dirText: { fontSize: 11, fontWeight: '700' },
   positionAmount: { fontSize: 16, fontWeight: '800' },
+  positionDate: { fontSize: 11, color: '#555', marginLeft: 'auto' },
   sportRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
   sportName: { fontSize: 11, color: '#666', width: 52 },
   barTrack: { flex: 1, height: 4, backgroundColor: '#1a1a1a', borderRadius: 2, overflow: 'hidden' },
