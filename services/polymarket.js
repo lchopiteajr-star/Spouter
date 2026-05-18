@@ -1,7 +1,107 @@
-// Polymarket CLOB API — global recent trades, no auth required
-const CLOB_BASE = 'https://clob.polymarket.com';
+// Data sources:
+//   Trades:  The Graph — polymarket/polymarket-matic subgraph (public, no auth)
+//   Titles:  Gamma API — gamma-api.polymarket.com/markets (public)
+//
+// FpmmTransaction schema fields:
+//   id, type (Buy|Sell), timestamp (BigInt unix secs), user (address),
+//   tradeAmount (BigInt USDC 6-decimal), feeAmount, outcomeIndex (0=Yes 1=No),
+//   outcomeTokensAmount, market { id, conditions }
 
-const WHALE_THRESHOLD_USDC = 1_000; // start low until we confirm field names
+const GRAPH_URL = 'https://api.thegraph.com/subgraphs/name/polymarket/polymarket-matic';
+const GAMMA_BASE = 'https://gamma-api.polymarket.com';
+
+// tradeAmount is in USDC with 6 decimal places
+const USDC_DECIMALS = 1e6;
+const WHALE_THRESHOLD_USDC = 5_000;
+
+// Build the GraphQL query — last 24h, ordered by tradeAmount desc
+function buildQuery(since) {
+  return {
+    query: `{
+      fpmmTransactions(
+        first: 20
+        orderBy: tradeAmount
+        orderDirection: desc
+        where: {
+          timestamp_gte: "${since}"
+          type: Buy
+        }
+      ) {
+        id
+        type
+        timestamp
+        tradeAmount
+        outcomeIndex
+        user
+        market {
+          id
+          conditions
+        }
+      }
+    }`,
+  };
+}
+
+async function fetchGraphTrades() {
+  const since = String(Math.floor(Date.now() / 1000) - 86400); // 24h ago
+  const body = buildQuery(since);
+
+  console.log('[Spouter] Graph query since:', since);
+
+  const res = await fetch(GRAPH_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  console.log('[Spouter] Graph HTTP status:', res.status);
+  if (!res.ok) throw new Error(`Graph HTTP ${res.status}`);
+
+  const json = await res.json();
+  console.log('[Spouter] Graph raw (first 600):', JSON.stringify(json).slice(0, 600));
+
+  if (json.errors) {
+    console.log('[Spouter] Graph errors:', JSON.stringify(json.errors));
+    throw new Error(json.errors[0]?.message ?? 'GraphQL error');
+  }
+
+  const trades = json?.data?.fpmmTransactions ?? [];
+  console.log('[Spouter] Graph trades returned:', trades.length);
+  if (trades.length > 0) {
+    console.log('[Spouter] First trade:', JSON.stringify(trades[0]));
+  }
+  return trades;
+}
+
+// Best-effort: fetch market title from Gamma API using FPMM address or conditionId
+async function fetchMarketTitles(trades) {
+  // Collect unique condition IDs (first condition per market)
+  const conditionIds = [...new Set(
+    trades.map((t) => t.market?.conditions?.[0]).filter(Boolean)
+  )];
+
+  if (!conditionIds.length) return {};
+
+  try {
+    // Gamma API supports querying by condition_id
+    const qs = conditionIds.map((id) => `condition_ids=${id}`).join('&');
+    const res = await fetch(`${GAMMA_BASE}/markets?${qs}&limit=${conditionIds.length}`);
+    if (!res.ok) throw new Error(`Gamma HTTP ${res.status}`);
+    const data = await res.json();
+    const list = Array.isArray(data) ? data : data.data ?? [];
+
+    const map = {};
+    for (const m of list) {
+      const cid = m.conditionId ?? m.condition_id ?? '';
+      if (cid) map[cid] = m.question ?? m.title ?? '';
+    }
+    console.log('[Spouter] Market titles fetched:', Object.keys(map).length, '/', conditionIds.length);
+    return map;
+  } catch (e) {
+    console.log('[Spouter] Title fetch failed (non-fatal):', e.message);
+    return {};
+  }
+}
 
 function detectCategory(question = '') {
   const q = question.toLowerCase();
@@ -14,7 +114,7 @@ function detectCategory(question = '') {
 
 function shortenAddress(addr = '') {
   if (!addr || addr.length < 10) return addr;
-  return `${addr.slice(0, 5)}…${addr.slice(-4)}`;
+  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
 function formatUsdc(n) {
@@ -23,58 +123,25 @@ function formatUsdc(n) {
   return `$${Math.round(n)}`;
 }
 
-function timeAgo(ts) {
-  const diffMs = Date.now() - new Date(ts).getTime();
+function timeAgo(unixSecs) {
+  const diffMs = Date.now() - unixSecs * 1000;
   const mins = Math.round(diffMs / 60_000);
   if (mins < 1) return 'just now';
   if (mins < 60) return `${mins} min ago`;
   return `${Math.round(mins / 60)} hr ago`;
 }
 
-// Called after we confirm field names from logs — maps one trade to a whale card
-function tradeToWhale(trade, index) {
-  // Log first trade so we can confirm every field name
-  if (index === 0) {
-    console.log('[Spouter] tradeToWhale field check:', JSON.stringify(trade));
-  }
-
-  // Try every plausible USDC size field
-  const rawSize = parseFloat(
-    trade.size ?? trade.usdcSize ?? trade.amount ?? trade.notional ?? 0
-  );
-  const price = parseFloat(trade.price ?? 1);
-  // If price looks like a share price (0–1), size is shares → multiply
-  const usdc = price > 0 && price < 1 ? rawSize * price : rawSize;
-
-  // Wallet address — try every known field name
-  const addr =
-    trade.maker_address ?? trade.makerAddress ??
-    trade.owner ?? trade.proxyWallet ??
-    trade.taker ?? '';
-
-  // Display name — pseudonym if present, else shortened address
-  const name = trade.pseudonym ?? trade.name ?? shortenAddress(addr) ?? `Whale #${index + 1}`;
-
-  // Market question — try every nesting
-  const question =
-    trade.title ?? trade.question ??
-    trade.market?.question ?? trade.market?.title ??
-    trade.outcome_title ?? '';
-
-  // Direction from outcome + side
-  const outcome = trade.outcome ?? '';
-  const side = (trade.side ?? 'BUY').toUpperCase();
-  const direction =
-    (side === 'BUY' && outcome.toUpperCase().startsWith('Y')) ||
-    (side === 'SELL' && outcome.toUpperCase().startsWith('N'))
-      ? 'YES' : 'NO';
-
-  // Timestamp
-  const ts = trade.match_time ?? trade.timestamp ?? trade.created_at ?? trade.matchTime ?? Date.now();
-
+function tradeToWhale(trade, titleMap, index) {
+  const usdc = parseInt(trade.tradeAmount, 10) / USDC_DECIMALS;
+  const conditionId = trade.market?.conditions?.[0] ?? '';
+  const question = titleMap[conditionId] ?? '';
   const category = detectCategory(question);
 
-  let type = 'active';
+  // outcomeIndex 0 = Yes/first outcome, 1 = No/second outcome
+  // type=Buy always here (we filter to Buy in the query)
+  const direction = parseInt(trade.outcomeIndex, 10) === 0 ? 'YES' : 'NO';
+
+  let type = 'dormant';
   let stat = '';
   if (usdc >= 500_000) { type = 'consensus'; stat = 'Mega move'; }
   else if (usdc >= 100_000) { type = 'active'; stat = 'Large position'; }
@@ -87,16 +154,16 @@ function tradeToWhale(trade, index) {
   }[category];
 
   return {
-    id: trade.id ?? trade.transaction_hash ?? trade.transactionHash ?? `trade-${index}`,
-    name,
+    id: trade.id ?? `trade-${index}`,
+    name: shortenAddress(trade.user) || `Whale #${index + 1}`,
     type,
     badge: categoryBadge,
-    market: question.slice(0, 42) || 'Unknown market',
+    market: question.slice(0, 42) || `Market ${shortenAddress(trade.market?.id ?? '')}`,
     amount: formatUsdc(usdc),
     direction,
-    time: timeAgo(ts),
+    time: timeAgo(parseInt(trade.timestamp, 10)),
     stat,
-    raw: { addr, usdc, question, category, direction },
+    raw: { addr: trade.user ?? '', usdc, question, category, direction },
   };
 }
 
@@ -125,103 +192,52 @@ export const MOCK_WHALES = [
 ];
 
 export async function fetchWhaleActivity() {
-  console.log('[Spouter] fetchWhaleActivity START');
+  console.log('[Spouter] fetchWhaleActivity START — using The Graph');
   try {
-    const url = `${CLOB_BASE}/trades?limit=50`;
-    console.log('[Spouter] Fetching:', url);
-
-    const res = await fetch(url);
-    console.log('[Spouter] HTTP status:', res.status);
-
-    if (!res.ok) {
-      console.log('[Spouter] Non-OK response, going mock');
-      return MOCK_WHALES;
-    }
-
-    const raw = await res.text(); // text first so we can log it even if JSON parse fails
-    console.log('[Spouter] Raw response (first 500 chars):', raw.slice(0, 500));
-
-    let data;
-    try {
-      data = JSON.parse(raw);
-    } catch (e) {
-      console.log('[Spouter] JSON parse failed:', e.message);
-      return MOCK_WHALES;
-    }
-
-    console.log('[Spouter] Parsed type:', Array.isArray(data) ? 'array' : typeof data);
-    if (!Array.isArray(data)) {
-      console.log('[Spouter] Top-level keys:', Object.keys(data));
-    }
-
-    const trades = Array.isArray(data) ? data : data.data ?? data.trades ?? data.results ?? [];
-    console.log('[Spouter] Trade count:', trades.length);
+    const trades = await fetchGraphTrades();
 
     if (!trades.length) {
-      console.log('[Spouter] No trades, going mock');
+      console.log('[Spouter] No trades from Graph, going mock');
       return MOCK_WHALES;
     }
 
-    console.log('[Spouter] First trade keys:', Object.keys(trades[0]));
-    console.log('[Spouter] First trade:', JSON.stringify(trades[0]));
-    console.log('[Spouter] Second trade:', JSON.stringify(trades[1]));
+    // Filter by whale threshold
+    const whaleTrades = trades.filter(
+      (t) => parseInt(t.tradeAmount, 10) / USDC_DECIMALS >= WHALE_THRESHOLD_USDC
+    );
+    const topAmounts = trades
+      .map((t) => parseInt(t.tradeAmount, 10) / USDC_DECIMALS)
+      .sort((a, b) => b - a)
+      .slice(0, 5)
+      .map((v) => `$${Math.round(v)}`);
+    console.log(`[Spouter] Threshold filter: ${whaleTrades.length}/${trades.length} above $${WHALE_THRESHOLD_USDC} | top 5:`, topAmounts.join(', '));
 
-    // Filter for whale-sized trades
-    const whaleEvents = trades.filter((t) => {
-      const rawSize = parseFloat(t.size ?? t.usdcSize ?? t.amount ?? t.notional ?? 0);
-      const price = parseFloat(t.price ?? 1);
-      const usdc = price > 0 && price < 1 ? rawSize * price : rawSize;
-      return usdc >= WHALE_THRESHOLD_USDC;
-    });
-    console.log(`[Spouter] Trades >= $${WHALE_THRESHOLD_USDC}: ${whaleEvents.length} / ${trades.length}`);
+    const source = whaleTrades.length ? whaleTrades : trades; // use all if none pass threshold
 
-    const topUsdc = trades.map((t) => {
-      const rawSize = parseFloat(t.size ?? t.usdcSize ?? t.amount ?? t.notional ?? 0);
-      const price = parseFloat(t.price ?? 1);
-      return price > 0 && price < 1 ? rawSize * price : rawSize;
-    }).sort((a, b) => b - a).slice(0, 5);
-    console.log('[Spouter] Top 5 computed USDC values:', topUsdc.map((v) => `$${Math.round(v)}`).join(', '));
-
-    if (!whaleEvents.length) {
-      console.log('[Spouter] Nothing above threshold, going mock');
-      return MOCK_WHALES;
-    }
-
-    // Deduplicate by maker address, keep biggest per wallet
+    // Deduplicate by wallet, keep largest
     const byAddr = new Map();
-    for (const t of whaleEvents) {
-      const addr = t.maker_address ?? t.makerAddress ?? t.owner ?? t.proxyWallet ?? t.taker ?? `anon-${t.id}`;
-      const rawSize = parseFloat(t.size ?? t.usdcSize ?? t.amount ?? 0);
-      const price = parseFloat(t.price ?? 1);
-      const usdc = price > 0 && price < 1 ? rawSize * price : rawSize;
-      const existing = byAddr.get(addr);
-      const existingUsdc = (() => {
-        if (!existing) return 0;
-        const es = parseFloat(existing.size ?? existing.usdcSize ?? existing.amount ?? 0);
-        const ep = parseFloat(existing.price ?? 1);
-        return ep > 0 && ep < 1 ? es * ep : es;
-      })();
+    for (const t of source) {
+      const addr = t.user ?? `anon-${t.id}`;
+      const usdc = parseInt(t.tradeAmount, 10) / USDC_DECIMALS;
+      const existingUsdc = byAddr.has(addr)
+        ? parseInt(byAddr.get(addr).tradeAmount, 10) / USDC_DECIMALS : 0;
       if (usdc > existingUsdc) byAddr.set(addr, t);
     }
     console.log('[Spouter] Unique wallets:', byAddr.size);
 
-    const result = [...byAddr.values()]
-      .sort((a, b) => {
-        const calcUsdc = (t) => {
-          const s = parseFloat(t.size ?? t.usdcSize ?? t.amount ?? 0);
-          const p = parseFloat(t.price ?? 1);
-          return p > 0 && p < 1 ? s * p : s;
-        };
-        return calcUsdc(b) - calcUsdc(a);
-      })
-      .slice(0, 8)
-      .map(tradeToWhale);
+    const sorted = [...byAddr.values()]
+      .sort((a, b) => parseInt(b.tradeAmount, 10) - parseInt(a.tradeAmount, 10))
+      .slice(0, 8);
 
+    // Fetch market titles best-effort
+    const titleMap = await fetchMarketTitles(sorted);
+
+    const result = sorted.map((t, i) => tradeToWhale(t, titleMap, i));
     console.log('[Spouter] Returning', result.length, 'live whale cards');
     return result;
 
   } catch (err) {
-    console.log('[Spouter] UNEXPECTED ERROR:', err.message, err.stack);
+    console.log('[Spouter] ERROR:', err.message);
     return MOCK_WHALES;
   }
 }
