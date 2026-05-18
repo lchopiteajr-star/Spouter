@@ -98,6 +98,12 @@ function formatUsdc(n) {
   return `$${Math.round(n)}`;
 }
 
+function formatPnl(n) {
+  const abs = Math.abs(n);
+  const str = abs >= 1_000_000 ? `$${(abs / 1_000_000).toFixed(1)}M` : abs >= 1_000 ? `$${Math.round(abs / 1_000)}K` : `$${Math.round(abs)}`;
+  return n >= 0 ? `+${str}` : `-${str}`;
+}
+
 function timeAgo(unixSecs) {
   const mins = Math.round((Date.now() - unixSecs * 1000) / 60_000);
   if (mins < 1) return 'just now';
@@ -215,13 +221,30 @@ export async function fetchWhaleActivity() {
 
 export async function fetchWhaleProfile(addr) {
   if (!addr) return null;
-  const url = `${DATA_API_BASE}/trades?user=${addr}&limit=50`;
-  console.log('[Spouter] Profile fetch:', url);
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
-  const trades = Array.isArray(data) ? data : data.data ?? data.trades ?? [];
-  if (!trades.length) return null;
+
+  // Fetch trades and positions in parallel
+  const [trades, positions] = await Promise.all([
+    fetch(`${DATA_API_BASE}/trades?user=${addr}&limit=50`)
+      .then((r) => { if (!r.ok) throw new Error(`trades HTTP ${r.status}`); return r.json(); })
+      .then((d) => Array.isArray(d) ? d : d.data ?? d.trades ?? [])
+      .catch((e) => { console.log('[Spouter] trades error:', e.message); return []; }),
+
+    fetch(`${DATA_API_BASE}/positions?user=${addr}&limit=50`)
+      .then((r) => { if (!r.ok) throw new Error(`positions HTTP ${r.status}`); return r.json(); })
+      .then((d) => {
+        const list = Array.isArray(d) ? d : d.data ?? d.positions ?? [];
+        if (list[0]) {
+          console.log('[Spouter] positions[0] keys:', Object.keys(list[0]).join(', '));
+          console.log('[Spouter] positions[0] values:', JSON.stringify(list[0]));
+        } else {
+          console.log('[Spouter] positions: empty array');
+        }
+        return list;
+      })
+      .catch((e) => { console.log('[Spouter] positions error:', e.message); return []; }),
+  ]);
+
+  if (!trades.length && !positions.length) return null;
 
   const pseudonym = trades[0]?.pseudonym ?? trades[0]?.name ?? null;
 
@@ -262,7 +285,29 @@ export async function fetchWhaleProfile(addr) {
     };
   });
 
-  return { pseudonym, totalVolume: formatUsdc(totalVolume), biggestTrade: formatUsdc(biggestTrade), topCategory: topCatLabel, totalTrades: trades.length, recentTrades };
+  // PnL from positions — field names TBD from logs; try common variants
+  let realizedPnl = null;
+  let unrealizedPnl = null;
+  if (positions.length) {
+    const sumField = (field) => positions.reduce((s, p) => s + parseFloat(p[field] ?? 0), 0);
+    const r = sumField('realizedPnl') || sumField('realized_pnl') || sumField('pnl') || null;
+    const u = sumField('unrealizedPnl') || sumField('unrealized_pnl') || sumField('curValue') || sumField('currentValue') || null;
+    if (r) realizedPnl = formatPnl(r);
+    if (u) unrealizedPnl = formatPnl(u);
+    console.log('[Spouter] computed realizedPnl:', r, 'unrealizedPnl:', u);
+  }
+
+  return {
+    pseudonym,
+    totalVolume: formatUsdc(totalVolume),
+    biggestTrade: formatUsdc(biggestTrade),
+    topCategory: topCatLabel,
+    totalTrades: trades.length,
+    recentTrades,
+    realizedPnl,
+    unrealizedPnl,
+    positionCount: positions.length,
+  };
 }
 
 // ── Fetch whale trades ────────────────────────────────────────────────────────

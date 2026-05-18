@@ -68,14 +68,28 @@ export default function WhaleProfileScreen({ route, navigation }) {
                 <Text style={[styles.statVal, { color: accentColor }]}>{profile?.biggestTrade ?? '—'}</Text>
                 <Text style={styles.statLabel}>Biggest trade</Text>
               </View>
-              <View style={styles.statBox}>
-                <Text style={[styles.statVal, { color: accentColor, fontSize: 13 }]}>{profile?.topCategory ?? whale.badge ?? '—'}</Text>
-                <Text style={styles.statLabel}>Top category</Text>
-              </View>
-              <View style={styles.statBox}>
-                <Text style={[styles.statVal, { color: accentColor }]}>{profile?.totalTrades ?? '—'}</Text>
-                <Text style={styles.statLabel}>Trades fetched</Text>
-              </View>
+              {profile?.realizedPnl != null ? (
+                <View style={styles.statBox}>
+                  <Text style={[styles.statVal, { color: profile.realizedPnl.startsWith('+') ? '#00c896' : '#ff5555' }]}>{profile.realizedPnl}</Text>
+                  <Text style={styles.statLabel}>Realized PnL</Text>
+                </View>
+              ) : (
+                <View style={styles.statBox}>
+                  <Text style={[styles.statVal, { color: accentColor, fontSize: 13 }]}>{profile?.topCategory ?? whale.badge ?? '—'}</Text>
+                  <Text style={styles.statLabel}>Top category</Text>
+                </View>
+              )}
+              {profile?.unrealizedPnl != null ? (
+                <View style={styles.statBox}>
+                  <Text style={[styles.statVal, { color: profile.unrealizedPnl.startsWith('+') ? '#00c896' : '#ff5555' }]}>{profile.unrealizedPnl}</Text>
+                  <Text style={styles.statLabel}>Unrealized PnL</Text>
+                </View>
+              ) : (
+                <View style={styles.statBox}>
+                  <Text style={[styles.statVal, { color: accentColor }]}>{profile?.totalTrades ?? '—'}</Text>
+                  <Text style={styles.statLabel}>Trades fetched</Text>
+                </View>
+              )}
             </View>
 
             {whale.market && (
