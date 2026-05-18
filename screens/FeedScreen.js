@@ -225,7 +225,7 @@ const styles = StyleSheet.create({
   container:    { flex: 1, backgroundColor: '#0a0a0a' },
   header:       { paddingHorizontal: 16, paddingTop: 60, paddingBottom: 6 },
   logo:         { fontSize: 22, fontWeight: '700', color: '#fff', letterSpacing: 1 },
-  logoGreen:    { color: '#00c896' },
+  logoGreen:    { color: '#ff69b4' },
   headerSub:    { fontSize: 11, color: '#555', marginTop: 2 },
 
   filtersScroll: { flexGrow: 0 },
