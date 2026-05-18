@@ -53,21 +53,39 @@ function timeAgo(unixSecs) {
   return `${Math.round(mins / 60)} hr ago`;
 }
 
-// ── Fetch 1500 global trades across 3 pages ──────────────────────────────────
+// ── Probe positions endpoints ─────────────────────────────────────────────────
 
-async function fetchAllRecentTrades() {
-  const offsets = [0, 500, 1000];
-  const pages = await Promise.allSettled(
-    offsets.map((offset) =>
-      fetch(`${DATA_API_BASE}/trades?limit=500&offset=${offset}`)
-        .then((r) => r.ok ? r.json() : [])
-        .then((d) => Array.isArray(d) ? d : d.data ?? d.trades ?? [])
-        .catch(() => [])
-    )
-  );
-  const all = pages.flatMap((r) => r.status === 'fulfilled' ? r.value : []);
-  console.log(`[Spouter] Raw trades fetched: ${all.length} (${offsets.length} pages)`);
-  return all;
+async function fetchPositions() {
+  const endpoints = [
+    `${DATA_API_BASE}/positions?limit=100&sortBy=currentValue&sortDirection=desc`,
+    `${DATA_API_BASE}/holdings?limit=100&sortBy=value&sortDirection=desc`,
+  ];
+
+  const logItem = (label, item) => {
+    console.log(`[Spouter] ${label} keys+values:`);
+    for (const [k, v] of Object.entries(item)) {
+      console.log(`  ${k}: ${JSON.stringify(v)}`);
+    }
+  };
+
+  for (const url of endpoints) {
+    console.log('[Spouter] Trying:', url);
+    try {
+      const res = await fetch(url);
+      console.log(`[Spouter] → HTTP ${res.status}`);
+      if (!res.ok) continue;
+      const data = await res.json();
+      const items = Array.isArray(data) ? data : data.data ?? data.positions ?? data.holdings ?? [];
+      console.log(`[Spouter] → count: ${items.length}`);
+      if (items[0]) logItem(`first item from ${url}`, items[0]);
+      if (items.length) return items;
+    } catch (e) {
+      console.log(`[Spouter] → ERROR: ${e.message}`);
+    }
+  }
+
+  console.log('[Spouter] All position endpoints failed');
+  return [];
 }
 
 // ── Map trade → whale card ────────────────────────────────────────────────────
@@ -121,53 +139,80 @@ export const MOCK_WHALES = [
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
+// Map a position/holding item → whale card
+function positionToWhale(pos, index) {
+  // Try every plausible field name for USDC value
+  const usdc = parseFloat(
+    pos.currentValue ?? pos.value ?? pos.size ?? pos.usdcValue ??
+    pos.positionValue ?? pos.marketValue ?? pos.amount ?? 0
+  );
+
+  const question = pos.title ?? pos.question ?? pos.market?.title ?? pos.market?.question ?? pos.marketTitle ?? '';
+  const category = detectCategory(question);
+  const addr = pos.proxyWallet ?? pos.user ?? pos.userAddress ?? pos.wallet ?? pos.address ?? '';
+  const name = (pos.pseudonym ?? pos.name ?? pos.username ?? shortenAddress(addr)) || `Whale #${index + 1}`;
+  const outcome = pos.outcome ?? pos.side ?? pos.outcomeIndex ?? '';
+  const direction = /^(yes|up|buy|1)/i.test(String(outcome)) ? 'YES' : 'NO';
+  const ts = pos.timestamp ?? pos.updatedAt ?? pos.updated_at ?? pos.createdAt ?? null;
+
+  let type = 'dormant';
+  let stat = 'Open position';
+  if (usdc >= 500_000) { type = 'consensus'; stat = 'Mega position'; }
+  else if (usdc >= 100_000) { type = 'active'; stat = 'Large position'; }
+  else if (usdc >= 20_000) { type = 'ghost'; stat = 'Mid-tier whale'; }
+  else if (usdc >= 5_000) { type = 'active'; stat = 'Whale bet'; }
+
+  const categoryBadge = {
+    crypto: '⚡ Crypto', politics: '🏛 Politics',
+    sports: '⚽ Sports', entertainment: '🎬 Entertainment', other: '📊 Market',
+  }[category];
+
+  return {
+    id: pos.id ?? pos.proxyWallet ?? `pos-${index}`,
+    name,
+    type,
+    badge: categoryBadge,
+    market: question.slice(0, 42) || 'Unknown market',
+    amount: formatUsdc(usdc),
+    direction,
+    time: ts ? timeAgo(ts) : 'live now',
+    stat,
+    raw: { addr, usdc, question, category, direction },
+  };
+}
+
 export async function fetchWhaleActivity() {
-  console.log('[Spouter] fetchWhaleActivity START');
+  console.log('[Spouter] fetchWhaleActivity START — open positions');
   try {
-    const raw = await fetchAllRecentTrades();
-    if (!raw.length) {
-      console.log('[Spouter] No trades returned, going mock');
+    const positions = await fetchPositions();
+
+    if (!positions.length) {
+      console.log('[Spouter] No positions returned, going mock');
       return MOCK_WHALES;
     }
 
-    // Filter out 5-min micro markets — they dominate volume but have tiny $ sizes
-    const real = raw.filter((t) => !MICRO_MARKET.test(t.title ?? ''));
-    console.log(`[Spouter] After micro-market filter: ${real.length}/${raw.length}`);
+    // Filter out micro markets
+    const real = positions.filter((p) => !MICRO_MARKET.test(p.title ?? p.question ?? p.marketTitle ?? ''));
+    console.log(`[Spouter] After micro-market filter: ${real.length}/${positions.length}`);
+    const source = real.length ? real : positions;
 
-    if (!real.length) {
-      console.log('[Spouter] All trades were micro markets, going mock');
-      return MOCK_WHALES;
-    }
+    // Log value distribution
+    const topVals = source.slice(0, 8).map((p) => {
+      const v = parseFloat(p.currentValue ?? p.value ?? p.size ?? p.amount ?? 0);
+      return `$${Math.round(v)}`;
+    });
+    console.log('[Spouter] Top 8 values:', topVals.join(', '));
 
-    // Sort by true USDC value descending
-    real.sort((a, b) => extractUsdc(b) - extractUsdc(a));
+    // Filter by threshold; fall back to all if none qualify
+    const whales = source.filter((p) => {
+      const v = parseFloat(p.currentValue ?? p.value ?? p.size ?? p.amount ?? 0);
+      return v >= WHALE_THRESHOLD_USDC;
+    });
+    console.log(`[Spouter] Above $${WHALE_THRESHOLD_USDC}: ${whales.length}/${source.length}`);
+    const final = whales.length ? whales : source;
 
-    const top8usdc = real.slice(0, 8).map((t) => `$${Math.round(extractUsdc(t))}`);
-    console.log('[Spouter] Top 8 USDC after filter+sort:', top8usdc.join(', '));
-    if (real[0]) console.log('[Spouter] Biggest trade title:', real[0].title, '| USDC:', `$${Math.round(extractUsdc(real[0]))}`);
-
-    // Filter by whale threshold
-    const whaleTrades = real.filter((t) => extractUsdc(t) >= WHALE_THRESHOLD_USDC);
-    console.log(`[Spouter] Above $${WHALE_THRESHOLD_USDC}: ${whaleTrades.length}/${real.length}`);
-    const source = whaleTrades.length ? whaleTrades : real;
-
-    // Deduplicate by wallet, keep largest trade per address
-    const byAddr = new Map();
-    for (const t of source) {
-      const addr = t.proxyWallet ?? t.transactionHash ?? `anon-${Math.random()}`;
-      const usdc = extractUsdc(t);
-      if (!byAddr.has(addr) || usdc > extractUsdc(byAddr.get(addr))) {
-        byAddr.set(addr, t);
-      }
-    }
-    console.log('[Spouter] Unique wallets:', byAddr.size);
-
-    const result = [...byAddr.values()]
-      .sort((a, b) => extractUsdc(b) - extractUsdc(a))
-      .slice(0, 8)
-      .map((t, i) => tradeToWhale(t, t.title ?? '', i));
-
-    console.log('[Spouter] Returning', result.length, 'live whale cards');
+    const result = final.slice(0, 8).map(positionToWhale);
+    console.log('[Spouter] Returning', result.length, 'whale cards');
     return result;
 
   } catch (err) {
