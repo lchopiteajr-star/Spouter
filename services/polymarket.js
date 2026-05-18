@@ -10,18 +10,27 @@ const GAMMA_BASE = 'https://gamma-api.polymarket.com';
 
 const WHALE_THRESHOLD_USDC = 5_000;
 
-async function fetchTopMarkets(limit = 8) {
-  const url = `${GAMMA_BASE}/markets?active=true&closed=false&limit=${limit}`;
+const SPORTS_KEYWORDS = /soccer|football|nfl|nba|mlb|nhl|champions|premier|world cup|copa|bundesliga|la liga|cricket|tennis|golf|rugby|f1|formula|ufc|boxing|mma|fight|nascar|olympics|super bowl|playoff|tournament|match|game|season|championship/i;
+
+async function fetchTopMarkets(limit = 20) {
+  // Sort by volume descending so the busiest markets come first
+  const url = `${GAMMA_BASE}/markets?active=true&closed=false&limit=${limit}&order=volume&ascending=false`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Gamma markets HTTP ${res.status}`);
   const data = await res.json();
   const list = Array.isArray(data) ? data : data.data ?? data.markets ?? [];
-  return list
-    .filter((m) => m.conditionId || m.condition_id)
-    .map((m) => ({
-      conditionId: m.conditionId ?? m.condition_id,
-      question: m.question ?? m.title ?? '',
-    }));
+
+  // Filter to sports/UFC markets, fall back to all markets if none match
+  const all = list.filter((m) => m.conditionId || m.condition_id);
+  const sports = all.filter((m) => SPORTS_KEYWORDS.test(m.question ?? m.title ?? ''));
+  const source = sports.length >= 3 ? sports : all;
+
+  console.log(`[Spouter] fetchTopMarkets: ${all.length} total, ${sports.length} sports → using ${source.length}`);
+
+  return source.slice(0, 10).map((m) => ({
+    conditionId: m.conditionId ?? m.condition_id,
+    question: m.question ?? m.title ?? '',
+  }));
 }
 
 // V2 path: /markets/live-activity/{conditionId} — public, no auth

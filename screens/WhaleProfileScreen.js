@@ -1,6 +1,6 @@
 import { StyleSheet, Text, View, ScrollView, TouchableOpacity } from 'react-native';
 
-const isPro = false;
+const isPro = true;
 
 // Fallback profile data shown when a card doesn't carry full stats
 const DEFAULT_PROFILE = {
@@ -169,15 +169,6 @@ export default function WhaleProfileScreen({ route, navigation }) {
           </View>
         </View>
 
-        {!isPro && (
-          <View style={styles.upgradeBox}>
-            <Text style={styles.upgradeTitle}>Unlock full intelligence</Text>
-            <Text style={styles.upgradeSub}>Sport breakdown · Full history · Exit alerts · Real-time push</Text>
-            <TouchableOpacity style={styles.upgradeBtn}>
-              <Text style={styles.upgradeBtnText}>Start 7-day free trial · $9.99/mo</Text>
-            </TouchableOpacity>
-          </View>
-        )}
 
         <View style={{ height: 40 }} />
       </ScrollView>
