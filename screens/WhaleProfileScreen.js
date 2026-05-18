@@ -8,19 +8,42 @@ import Svg, { Polyline, Defs, LinearGradient, Stop, Path } from 'react-native-sv
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const WALLET = '0x8a791620dd6260079bf849dc5567adc3f2fdc318';
+const SLUG   = 'anoin123';
 const REFRESH_MS = 30_000;
 
-// Candidate endpoints tried in order — first one that returns a non-empty array wins
-const ACTIVE_CANDIDATES = [
-  `https://data-api.polymarket.com/positions?user=${WALLET}&sizeThreshold=.01&limit=200`,
-  `https://gamma-api.polymarket.com/positions?user=${WALLET}&limit=200`,
+// ── Step 1: resolve the slug → proxy wallet address ──────────────────────────
+// Polymarket creates a proxy wallet (Safe) per user that differs from their EOA.
+// The data-api positions endpoint needs the PROXY wallet, not the EOA.
+// We try two slug-resolution paths; if both fail we fall back to WALLET as-is.
+const SLUG_CANDIDATES = [
+  `https://gamma-api.polymarket.com/users?slug=${SLUG}`,
+  `https://data-api.polymarket.com/users?slug=${SLUG}`,
 ];
-const CLOSED_CANDIDATES = [
-  `https://data-api.polymarket.com/positions?user=${WALLET}&sizeThreshold=.01&limit=200&closed=true`,
-  `https://gamma-api.polymarket.com/positions?user=${WALLET}&limit=200&closed=true`,
-];
+
+// ── Step 2: positions (tried after we have a confirmed address) ──────────────
+// NOTE: sizeThreshold is dropped — it was filtering everything out in tests.
+function buildActiveCandidates(addr) {
+  return [
+    `https://data-api.polymarket.com/positions?user=${addr}&limit=200`,
+    `https://data-api.polymarket.com/positions?user=${addr}&limit=200&sizeThreshold=.01`,
+    `https://gamma-api.polymarket.com/positions?user=${addr}&limit=200`,
+  ];
+}
+function buildClosedCandidates(addr) {
+  return [
+    `https://data-api.polymarket.com/positions?user=${addr}&limit=200&closed=true`,
+    `https://gamma-api.polymarket.com/positions?user=${addr}&limit=200&closed=true`,
+  ];
+}
+
+// ── Step 3: trades — used as a diagnostic fallback to confirm address works ──
+function buildTradeCandidate(addr) {
+  return `https://data-api.polymarket.com/trades?user=${addr}&limit=5`;
+}
+
 const CHART_CANDIDATES = [
   `https://data-api.polymarket.com/portfolio-value?user=${WALLET}&interval=1d`,
+  `https://data-api.polymarket.com/value?user=${WALLET}&interval=1d`,
 ];
 
 const { width: SCREEN_W } = Dimensions.get('window');
@@ -311,6 +334,7 @@ export default function WhaleProfileScreen({ route, navigation }) {
   const [activePositions, setActivePositions] = useState([]);
   const [closedPositions, setClosedPositions] = useState([]);
   const [chartPoints,     setChartPoints]     = useState([]);
+  const [resolvedAddr,    setResolvedAddr]    = useState(WALLET);
   const [activeLoading,   setActiveLoading]   = useState(true);
   const [closedLoading,   setClosedLoading]   = useState(false);
   const [closedFetched,   setClosedFetched]   = useState(false);
@@ -321,24 +345,52 @@ export default function WhaleProfileScreen({ route, navigation }) {
   const [lastRefresh,     setLastRefresh]     = useState(null);
   const intervalRef = useRef(null);
 
-  const loadActive = useCallback(async () => {
-    const { arr, url, log } = await fetchWithFallback(ACTIVE_CANDIDATES, 'ACTIVE');
+  // ── Step 1: resolve slug → proxy wallet address ─────────────────────────────
+  const resolveAddress = useCallback(async () => {
+    const { arr, url } = await fetchWithFallback(SLUG_CANDIDATES, 'SLUG');
+    if (arr.length) {
+      // gamma-api returns [{proxyWallet, address, pseudonym, ...}]
+      const user  = arr[0];
+      const proxy = user.proxyWallet ?? user.proxy_wallet ?? user.address ?? WALLET;
+      console.log('[SLUG] resolved', SLUG, '→', proxy, 'via', url);
+      console.log('[SLUG] full user object:', JSON.stringify(user).slice(0, 300));
+      setResolvedAddr(proxy);
+      return proxy;
+    }
+    console.log('[SLUG] could not resolve slug, using hardcoded WALLET');
+    return WALLET;
+  }, []);
+
+  // ── Step 2: fetch positions using confirmed address ──────────────────────────
+  const loadActive = useCallback(async (addr) => {
+    const { arr, url, log } = await fetchWithFallback(buildActiveCandidates(addr), 'ACTIVE');
     setDebugLog(log);
+
     if (arr.length) {
       setActivePositions(processPositions(arr));
       setLastRefresh(new Date());
       setError(null);
       console.log(`[ACTIVE] loaded ${arr.length} positions from`, url);
     } else {
-      setError('No data from any endpoint. See diagnostic panel below.');
+      // Fallback diagnostic: check if TRADES work for this address
+      const tradeUrl = buildTradeCandidate(addr);
+      console.log('[DIAGNOSTIC] trying trades endpoint:', tradeUrl);
+      try {
+        const r = await fetch(tradeUrl);
+        const t = await r.text();
+        console.log('[DIAGNOSTIC] trades HTTP', r.status, '— first 300 chars:', t.slice(0, 300));
+      } catch (e) {
+        console.log('[DIAGNOSTIC] trades fetch failed:', e.message);
+      }
+      setError(`Address ${addr.slice(0, 8)}… returned 0 positions from all endpoints. Check Metro logs for [DIAGNOSTIC] output.`);
     }
     setActiveLoading(false);
   }, []);
 
-  const loadClosed = useCallback(async () => {
+  const loadClosed = useCallback(async (addr) => {
     if (closedFetched) return;
     setClosedLoading(true);
-    const { arr, url } = await fetchWithFallback(CLOSED_CANDIDATES, 'CLOSED');
+    const { arr, url } = await fetchWithFallback(buildClosedCandidates(addr), 'CLOSED');
     if (arr.length) {
       setClosedPositions(processPositions(arr));
       console.log(`[CLOSED] loaded ${arr.length} positions from`, url);
@@ -347,8 +399,9 @@ export default function WhaleProfileScreen({ route, navigation }) {
     setClosedFetched(true);
   }, [closedFetched]);
 
-  const loadChart = useCallback(async () => {
-    const { arr } = await fetchWithFallback(CHART_CANDIDATES, 'CHART');
+  const loadChart = useCallback(async (addr) => {
+    const candidates = CHART_CANDIDATES.map((u) => u.replace(WALLET, addr));
+    const { arr } = await fetchWithFallback(candidates, 'CHART');
     if (arr.length) {
       const pts = arr.map((d) => parseFloat(d.value ?? d.portfolioValue ?? d.v ?? 0));
       setChartPoints(pts);
@@ -356,16 +409,21 @@ export default function WhaleProfileScreen({ route, navigation }) {
     }
   }, []);
 
+  // ── Boot sequence ────────────────────────────────────────────────────────────
   useEffect(() => {
-    loadActive();
-    loadChart();
-    intervalRef.current = setInterval(loadActive, REFRESH_MS);
+    (async () => {
+      const addr = await resolveAddress();
+      setResolvedAddr(addr);
+      await loadActive(addr);
+      loadChart(addr);
+      intervalRef.current = setInterval(() => loadActive(addr), REFRESH_MS);
+    })();
     return () => clearInterval(intervalRef.current);
-  }, [loadActive, loadChart]);
+  }, []);
 
   useEffect(() => {
-    if (posTab === 'closed') loadClosed();
-  }, [posTab, loadClosed]);
+    if (posTab === 'closed') loadClosed(resolvedAddr);
+  }, [posTab]);
 
   const allPositions = [...activePositions, ...closedPositions];
   const totalValue   = activePositions.reduce((s, p) => s + p.currentValue, 0);
@@ -378,7 +436,7 @@ export default function WhaleProfileScreen({ route, navigation }) {
 
   const secsAgo     = lastRefresh ? Math.round((Date.now() - lastRefresh) / 1000) : null;
   const refreshLabel = secsAgo === null ? '' : secsAgo < 5 ? '● just now' : `● ${secsAgo}s ago`;
-  const shortAddr    = `${WALLET.slice(0, 6)}…${WALLET.slice(-4)}`;
+  const shortAddr    = `${resolvedAddr.slice(0, 6)}…${resolvedAddr.slice(-4)}`;
 
   return (
     <View style={styles.container}>
