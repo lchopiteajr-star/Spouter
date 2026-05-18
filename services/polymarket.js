@@ -60,19 +60,45 @@ function extractUsdc(trade) {
 // ── Global trades fetch ───────────────────────────────────────────────────────
 
 async function fetchGlobalTrades() {
-  const url = `${DATA_API_BASE}/trades?limit=500&sortBy=usdcSize&sortDirection=desc`;
-  console.log('[Spouter] Fetching global trades:', url);
-  const res = await fetch(url);
-  console.log('[Spouter] HTTP status:', res.status);
-  if (!res.ok) throw new Error(`data-api HTTP ${res.status}`);
-  const data = await res.json();
-  const trades = Array.isArray(data) ? data : data.data ?? data.trades ?? [];
-  console.log('[Spouter] Trades returned:', trades.length);
-  if (trades[0]) {
-    console.log('[Spouter] First trade keys:', Object.keys(trades[0]));
-    console.log('[Spouter] First trade:', JSON.stringify(trades[0]));
+  // Fetch A: with sortBy — see if usdcSize field appears when sorting by it
+  const urlA = `${DATA_API_BASE}/trades?limit=10&sortBy=usdcSize&sortDirection=desc`;
+  // Fetch B: without sortBy — plain recent trades, may expose different fields
+  const urlB = `${DATA_API_BASE}/trades?limit=10`;
+
+  console.log('[Spouter] Fetching A (sortBy=usdcSize):', urlA);
+  console.log('[Spouter] Fetching B (no sortBy):', urlB);
+
+  const [resA, resB] = await Promise.all([fetch(urlA), fetch(urlB)]);
+  console.log('[Spouter] A status:', resA.status, '| B status:', resB.status);
+
+  const logTrade = (label, trade) => {
+    console.log(`[Spouter] ${label} ALL keys+values:`);
+    for (const [k, v] of Object.entries(trade)) {
+      console.log(`  ${k}: ${JSON.stringify(v)}`);
+    }
+  };
+
+  if (resA.ok) {
+    const dataA = await resA.json();
+    const tradesA = Array.isArray(dataA) ? dataA : dataA.data ?? dataA.trades ?? [];
+    console.log('[Spouter] A trade count:', tradesA.length);
+    if (tradesA[0]) logTrade('A[0]', tradesA[0]);
+    if (tradesA[1]) logTrade('A[1]', tradesA[1]);
   }
-  return trades;
+
+  if (resB.ok) {
+    const dataB = await resB.json();
+    const tradesB = Array.isArray(dataB) ? dataB : dataB.data ?? dataB.trades ?? [];
+    console.log('[Spouter] B trade count:', tradesB.length);
+    if (tradesB[0]) logTrade('B[0]', tradesB[0]);
+  }
+
+  // For the actual data, use A (sorted) as the main fetch with full limit
+  const urlMain = `${DATA_API_BASE}/trades?limit=500&sortBy=usdcSize&sortDirection=desc`;
+  const resMain = await fetch(urlMain);
+  if (!resMain.ok) throw new Error(`data-api HTTP ${resMain.status}`);
+  const dataMain = await resMain.json();
+  return Array.isArray(dataMain) ? dataMain : dataMain.data ?? dataMain.trades ?? [];
 }
 
 // ── Map trade → whale card ────────────────────────────────────────────────────
