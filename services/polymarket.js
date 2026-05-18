@@ -4,7 +4,6 @@
 //     timestamp (unix secs), title, outcome, outcomeIndex, transactionHash, conditionId
 //
 // True USDC = size × price  (both fields confirmed present)
-const GAMMA_BASE = 'https://gamma-api.polymarket.com';
 const DATA_API_BASE = 'https://data-api.polymarket.com';
 
 const WHALE_THRESHOLD_USDC = 200;
@@ -54,36 +53,21 @@ function timeAgo(unixSecs) {
   return `${Math.round(mins / 60)} hr ago`;
 }
 
-// ── Fetch top markets from Gamma ─────────────────────────────────────────────
+// ── Fetch 1500 global trades across 3 pages ──────────────────────────────────
 
-async function fetchTopMarkets() {
-  const url = `${GAMMA_BASE}/markets?limit=100&order=volume&ascending=false&active=true&closed=false`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Gamma markets HTTP ${res.status}`);
-  const data = await res.json();
-  const all = Array.isArray(data) ? data : data.data ?? data.markets ?? [];
-
-  // Drop 5-min micro markets — they have huge trade counts but tiny dollar sizes
-  const filtered = all.filter((m) => !MICRO_MARKET.test(m.question ?? m.title ?? ''));
-
-  console.log(`[Spouter] Markets: ${all.length} total → ${filtered.length} after filtering micro markets`);
-  if (filtered[0]) console.log('[Spouter] Top market:', filtered[0].question ?? filtered[0].title, '| conditionId:', filtered[0].conditionId);
-
-  return filtered;
-}
-
-// ── Fetch trades for one market from data-api ────────────────────────────────
-
-async function fetchTradesForMarket(conditionId) {
-  const url = `${DATA_API_BASE}/trades?market=${conditionId}&limit=50`;
-  try {
-    const res = await fetch(url);
-    if (!res.ok) return [];
-    const data = await res.json();
-    return Array.isArray(data) ? data : data.data ?? data.trades ?? [];
-  } catch {
-    return [];
-  }
+async function fetchAllRecentTrades() {
+  const offsets = [0, 500, 1000];
+  const pages = await Promise.allSettled(
+    offsets.map((offset) =>
+      fetch(`${DATA_API_BASE}/trades?limit=500&offset=${offset}`)
+        .then((r) => r.ok ? r.json() : [])
+        .then((d) => Array.isArray(d) ? d : d.data ?? d.trades ?? [])
+        .catch(() => [])
+    )
+  );
+  const all = pages.flatMap((r) => r.status === 'fulfilled' ? r.value : []);
+  console.log(`[Spouter] Raw trades fetched: ${all.length} (${offsets.length} pages)`);
+  return all;
 }
 
 // ── Map trade → whale card ────────────────────────────────────────────────────
@@ -140,62 +124,48 @@ export const MOCK_WHALES = [
 export async function fetchWhaleActivity() {
   console.log('[Spouter] fetchWhaleActivity START');
   try {
-    const markets = await fetchTopMarkets();
-    if (!markets.length) {
-      console.log('[Spouter] No markets, going mock');
+    const raw = await fetchAllRecentTrades();
+    if (!raw.length) {
+      console.log('[Spouter] No trades returned, going mock');
       return MOCK_WHALES;
     }
 
-    // Fetch trades for top 30 non-micro markets in parallel
-    const top30 = markets.slice(0, 30);
-    const batches = await Promise.allSettled(
-      top30.map((m) => fetchTradesForMarket(m.conditionId ?? m.condition_id))
-    );
+    // Filter out 5-min micro markets — they dominate volume but have tiny $ sizes
+    const real = raw.filter((t) => !MICRO_MARKET.test(t.title ?? ''));
+    console.log(`[Spouter] After micro-market filter: ${real.length}/${raw.length}`);
 
-    const successCount = batches.filter((r) => r.status === 'fulfilled' && r.value.length > 0).length;
-    console.log(`[Spouter] Markets with trades: ${successCount}/${top30.length}`);
-
-    // Pair each trade with its market title from Gamma
-    const allPairs = batches.flatMap((r, i) =>
-      r.status === 'fulfilled'
-        ? r.value.map((trade) => ({ trade, marketTitle: top30[i].question ?? top30[i].title ?? '' }))
-        : []
-    );
-    console.log('[Spouter] Total trades collected:', allPairs.length);
-
-    if (!allPairs.length) {
-      console.log('[Spouter] No trades, going mock');
+    if (!real.length) {
+      console.log('[Spouter] All trades were micro markets, going mock');
       return MOCK_WHALES;
     }
 
-    // Log size distribution
-    const topUsdc = allPairs
-      .map(({ trade }) => extractUsdc(trade))
-      .sort((a, b) => b - a)
-      .slice(0, 8)
-      .map((v) => `$${Math.round(v)}`);
-    console.log('[Spouter] Top 8 USDC values:', topUsdc.join(', '));
+    // Sort by true USDC value descending
+    real.sort((a, b) => extractUsdc(b) - extractUsdc(a));
 
-    // Filter by threshold; fall back to all if none qualify
-    const whalePairs = allPairs.filter(({ trade }) => extractUsdc(trade) >= WHALE_THRESHOLD_USDC);
-    console.log(`[Spouter] Above $${WHALE_THRESHOLD_USDC}: ${whalePairs.length}/${allPairs.length}`);
-    const source = whalePairs.length ? whalePairs : allPairs;
+    const top8usdc = real.slice(0, 8).map((t) => `$${Math.round(extractUsdc(t))}`);
+    console.log('[Spouter] Top 8 USDC after filter+sort:', top8usdc.join(', '));
+    if (real[0]) console.log('[Spouter] Biggest trade title:', real[0].title, '| USDC:', `$${Math.round(extractUsdc(real[0]))}`);
+
+    // Filter by whale threshold
+    const whaleTrades = real.filter((t) => extractUsdc(t) >= WHALE_THRESHOLD_USDC);
+    console.log(`[Spouter] Above $${WHALE_THRESHOLD_USDC}: ${whaleTrades.length}/${real.length}`);
+    const source = whaleTrades.length ? whaleTrades : real;
 
     // Deduplicate by wallet, keep largest trade per address
     const byAddr = new Map();
-    for (const pair of source) {
-      const addr = pair.trade.proxyWallet ?? pair.trade.transactionHash ?? `anon-${Math.random()}`;
-      const usdc = extractUsdc(pair.trade);
-      if (!byAddr.has(addr) || usdc > extractUsdc(byAddr.get(addr).trade)) {
-        byAddr.set(addr, pair);
+    for (const t of source) {
+      const addr = t.proxyWallet ?? t.transactionHash ?? `anon-${Math.random()}`;
+      const usdc = extractUsdc(t);
+      if (!byAddr.has(addr) || usdc > extractUsdc(byAddr.get(addr))) {
+        byAddr.set(addr, t);
       }
     }
     console.log('[Spouter] Unique wallets:', byAddr.size);
 
     const result = [...byAddr.values()]
-      .sort((a, b) => extractUsdc(b.trade) - extractUsdc(a.trade))
+      .sort((a, b) => extractUsdc(b) - extractUsdc(a))
       .slice(0, 8)
-      .map(({ trade, marketTitle }, i) => tradeToWhale(trade, marketTitle, i));
+      .map((t, i) => tradeToWhale(t, t.title ?? '', i));
 
     console.log('[Spouter] Returning', result.length, 'live whale cards');
     return result;
