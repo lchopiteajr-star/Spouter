@@ -46,7 +46,7 @@ function WhaleCard({ whale, index, onPress }) {
 
   const cardColor = typeColors[whale.type]      ?? '#00c896';
   const cardBg    = typeBackground[whale.type]  ?? '#0b1612';
-  const sc        = scoreColor(whale.score ?? 0);
+  const sc        = scoreColor(whale.score ?? 1);
 
   return (
     <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>

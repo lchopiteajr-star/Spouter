@@ -10,7 +10,7 @@ const ACCENT_BG = { active: '#0a2a1a', ghost: '#0b1220', dormant: '#0c0a18', con
 
 // ── Animated leaderboard row ──────────────────────────────────────────────────
 
-function LeaderRow({ whale, rank, onPress, animDelay }) {
+function LeaderRow({ whale, rank, onPress, animDelay, showPnl }) {
   const slideAnim = useRef(new Animated.Value(40)).current;
   const fadeAnim  = useRef(new Animated.Value(0)).current;
 
@@ -28,7 +28,7 @@ function LeaderRow({ whale, rank, onPress, animDelay }) {
     : whale.raw?.addr ?? '';
   const pnlStr = whale.pnl?.formatted ?? null;
   const pnlPos = pnlStr?.startsWith('+');
-  const sc     = scoreColor(whale.score ?? 0);
+  const sc     = scoreColor(whale.score ?? 1);
 
   return (
     <Animated.View style={{ opacity: fadeAnim, transform: [{ translateX: slideAnim }] }}>
@@ -54,7 +54,7 @@ function LeaderRow({ whale, rank, onPress, animDelay }) {
           </View>
         </View>
         <View style={styles.stats}>
-          {pnlStr ? (
+          {showPnl && pnlStr ? (
             <>
               <Text style={[styles.pnl, { color: pnlPos ? '#00c896' : '#ff5555' }]}>{pnlStr}</Text>
               <Text style={styles.pnlLabel}>total PnL</Text>
@@ -62,7 +62,7 @@ function LeaderRow({ whale, rank, onPress, animDelay }) {
           ) : (
             <>
               <Text style={[styles.pnl, { color: accent }]}>{whale.amount}</Text>
-              <Text style={styles.pnlLabel}>volume</Text>
+              <Text style={styles.pnlLabel}>biggest trade</Text>
             </>
           )}
         </View>
@@ -166,6 +166,7 @@ export default function LeaderboardScreen({ navigation }) {
               whale={whale}
               rank={i}
               animDelay={i * 50}
+              showPnl={activeTab === 'pnl'}
               onPress={() => navigation.navigate('WhaleProfile', { whale })}
             />
           ))}

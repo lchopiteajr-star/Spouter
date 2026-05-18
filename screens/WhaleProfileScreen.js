@@ -11,7 +11,8 @@ function CountStat({ value, label, color, format = 'number' }) {
   const [display, setDisplay] = useState('—');
 
   useEffect(() => {
-    if (!value || typeof value !== 'number') return;
+    if (value === null || value === undefined || typeof value !== 'number') return;
+    if (value === 0) { setDisplay('0'); return; }
     const steps    = 24;
     const duration = 700;
     let   step     = 0;
@@ -87,7 +88,7 @@ export default function WhaleProfileScreen({ route, navigation }) {
   const shortAddr   = addr.length >= 10 ? `${addr.slice(0, 6)}…${addr.slice(-4)}` : addr;
 
   const score       = profile?.score ?? whale.score ?? null;
-  const sc          = scoreColor(score ?? 0);
+  const sc          = scoreColor(score ?? 1);
   const pnlValue    = profile?.totalCashPnl ?? null;
   const pnlPositive = pnlValue?.startsWith('+');
 
