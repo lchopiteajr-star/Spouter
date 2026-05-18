@@ -57,8 +57,15 @@ function timeAgo(unixSecs) {
 
 async function fetchPositions() {
   const endpoints = [
-    `${DATA_API_BASE}/positions?limit=100&sortBy=currentValue&sortDirection=desc`,
-    `${DATA_API_BASE}/holdings?limit=100&sortBy=value&sortDirection=desc`,
+    // /positions without sort params (400 was likely caused by invalid sortBy value)
+    `${DATA_API_BASE}/positions?limit=100`,
+    // alternate sort param styles
+    `${DATA_API_BASE}/positions?limit=100&sort=currentValue&order=desc`,
+    `${DATA_API_BASE}/positions?limit=100&orderBy=currentValue&orderDirection=desc`,
+    // other likely endpoints
+    `${DATA_API_BASE}/leaderboard?limit=100`,
+    `${DATA_API_BASE}/activity?limit=100`,
+    `${DATA_API_BASE}/large-trades?limit=100`,
   ];
 
   const logItem = (label, item) => {
