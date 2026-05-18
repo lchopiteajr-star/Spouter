@@ -219,10 +219,46 @@ export async function fetchWhaleActivity() {
 
 // ── Whale profile ─────────────────────────────────────────────────────────────
 
+function processPositions(positions) {
+  const now = new Date();
+  let totalCashPnl = 0;
+
+  const list = positions.map((p) => {
+    const cashPnl = parseFloat(p.cashPnl ?? 0);
+    const percentPnl = parseFloat(p.percentPnl ?? 0);
+    const currentValue = parseFloat(p.currentValue ?? 0);
+    const initialValue = parseFloat(p.initialValue ?? p.cashInvested ?? 0);
+    const redeemable = p.redeemable === true;
+    const endDate = p.endDate ? new Date(p.endDate) : null;
+    const isOpen = endDate ? endDate > now : false;
+
+    totalCashPnl += cashPnl;
+
+    let status = null;
+    if (currentValue === 0 && redeemable) status = 'LOST';
+    else if (isOpen) status = 'OPEN';
+
+    // percentPnl may be a ratio (0.42) or already a percentage (42.0)
+    const pctDisplay = `${percentPnl >= 0 ? '+' : ''}${(Math.abs(percentPnl) <= 1 ? percentPnl * 100 : percentPnl).toFixed(1)}%`;
+
+    return {
+      title: (p.title ?? p.market?.title ?? 'Unknown market').slice(0, 42),
+      outcome: p.outcome ?? p.outcomeTitle ?? '—',
+      initialValue: initialValue > 0 ? formatUsdc(initialValue) : null,
+      currentValue: currentValue > 0 ? formatUsdc(currentValue) : null,
+      cashPnl: formatPnl(cashPnl),
+      cashPnlRaw: cashPnl,
+      pctDisplay,
+      status,
+    };
+  });
+
+  return { list, totalCashPnl };
+}
+
 export async function fetchWhaleProfile(addr) {
   if (!addr) return null;
 
-  // Fetch trades and positions in parallel
   const [trades, positions] = await Promise.all([
     fetch(`${DATA_API_BASE}/trades?user=${addr}&limit=50`)
       .then((r) => { if (!r.ok) throw new Error(`trades HTTP ${r.status}`); return r.json(); })
@@ -231,16 +267,7 @@ export async function fetchWhaleProfile(addr) {
 
     fetch(`${DATA_API_BASE}/positions?user=${addr}&limit=50`)
       .then((r) => { if (!r.ok) throw new Error(`positions HTTP ${r.status}`); return r.json(); })
-      .then((d) => {
-        const list = Array.isArray(d) ? d : d.data ?? d.positions ?? [];
-        if (list[0]) {
-          console.log('[Spouter] positions[0] keys:', Object.keys(list[0]).join(', '));
-          console.log('[Spouter] positions[0] values:', JSON.stringify(list[0]));
-        } else {
-          console.log('[Spouter] positions: empty array');
-        }
-        return list;
-      })
+      .then((d) => Array.isArray(d) ? d : d.data ?? d.positions ?? [])
       .catch((e) => { console.log('[Spouter] positions error:', e.message); return []; }),
   ]);
 
@@ -248,10 +275,8 @@ export async function fetchWhaleProfile(addr) {
 
   const pseudonym = trades[0]?.pseudonym ?? trades[0]?.name ?? null;
 
-  let totalVolume = 0;
-  let biggestTrade = 0;
+  let totalVolume = 0, biggestTrade = 0;
   const catCounts = {};
-
   for (const t of trades) {
     const usdc = extractUsdc(t);
     totalVolume += usdc;
@@ -259,43 +284,10 @@ export async function fetchWhaleProfile(addr) {
     const cat = detectCategory(t.title ?? '');
     catCounts[cat] = (catCounts[cat] ?? 0) + 1;
   }
-
   const topCat = Object.entries(catCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'other';
-  const topCatLabel = {
-    crypto: '⚡ Crypto', politics: '🏛 Politics',
-    sports: '⚽ Sports', entertainment: '🎬 Entertainment', other: '📊 Market',
-  }[topCat];
+  const topCatLabel = { crypto: '⚡ Crypto', politics: '🏛 Politics', sports: '⚽ Sports', entertainment: '🎬 Entertainment', other: '📊 Market' }[topCat];
 
-  const recentTrades = trades.slice(0, 10).map((t) => {
-    const usdc = extractUsdc(t);
-    const outcome = t.outcome ?? (t.outcomeIndex === 0 ? 'Yes' : 'No');
-    const side = (t.side ?? '').toUpperCase();
-    const isYes = /^yes$/i.test(outcome);
-    const isNo = /^no$/i.test(outcome);
-    const isBuy = side === 'BUY';
-    let result = 'open';
-    if ((isYes && isBuy) || (isNo && !isBuy)) result = 'win';
-    else if ((isYes && !isBuy) || (isNo && isBuy)) result = 'loss';
-    return {
-      market: (t.title ?? 'Unknown market').slice(0, 40),
-      amount: formatUsdc(usdc),
-      outcome,
-      result,
-      time: timeAgo(t.timestamp),
-    };
-  });
-
-  // PnL from positions — field names TBD from logs; try common variants
-  let realizedPnl = null;
-  let unrealizedPnl = null;
-  if (positions.length) {
-    const sumField = (field) => positions.reduce((s, p) => s + parseFloat(p[field] ?? 0), 0);
-    const r = sumField('realizedPnl') || sumField('realized_pnl') || sumField('pnl') || null;
-    const u = sumField('unrealizedPnl') || sumField('unrealized_pnl') || sumField('curValue') || sumField('currentValue') || null;
-    if (r) realizedPnl = formatPnl(r);
-    if (u) unrealizedPnl = formatPnl(u);
-    console.log('[Spouter] computed realizedPnl:', r, 'unrealizedPnl:', u);
-  }
+  const { list: positionList, totalCashPnl } = processPositions(positions);
 
   return {
     pseudonym,
@@ -303,11 +295,23 @@ export async function fetchWhaleProfile(addr) {
     biggestTrade: formatUsdc(biggestTrade),
     topCategory: topCatLabel,
     totalTrades: trades.length,
-    recentTrades,
-    realizedPnl,
-    unrealizedPnl,
-    positionCount: positions.length,
+    positions: positionList,
+    totalCashPnl: positionList.length ? formatPnl(totalCashPnl) : null,
+    totalCashPnlRaw: totalCashPnl,
   };
+}
+
+// Lightweight PnL fetch for leaderboard ranking
+export async function fetchWhalePnl(addr) {
+  if (!addr) return null;
+  try {
+    const res = await fetch(`${DATA_API_BASE}/positions?user=${addr}&limit=50`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const positions = Array.isArray(data) ? data : data.data ?? data.positions ?? [];
+    const total = positions.reduce((s, p) => s + parseFloat(p.cashPnl ?? 0), 0);
+    return { totalCashPnl: total, formatted: formatPnl(total) };
+  } catch { return null; }
 }
 
 // ── Fetch whale trades ────────────────────────────────────────────────────────

@@ -1,39 +1,46 @@
 import { StyleSheet, Text, View, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useState, useEffect } from 'react';
-import { fetchWhaleActivity, getCachedWhales } from '../services/polymarket';
+import { fetchWhaleActivity, getCachedWhales, fetchWhalePnl } from '../services/polymarket';
 
 const ACCENT = { active: '#00c896', ghost: '#00aaff', dormant: '#a07fff', consensus: '#7fff9b' };
 const ACCENT_BG = { active: '#0a2a1a', ghost: '#0b1220', dormant: '#0c0a18', consensus: '#0a1408' };
 
 export default function LeaderboardScreen({ navigation }) {
-  const [whales, setWhales] = useState([]);
+  const [ranked, setRanked] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const cached = getCachedWhales();
-    if (cached?.length) {
-      setWhales(cached);
-      setLoading(false);
-    } else {
-      fetchWhaleActivity()
-        .then(setWhales)
-        .finally(() => setLoading(false));
-    }
-  }, []);
+    async function load() {
+      const cached = getCachedWhales();
+      const whales = cached?.length ? cached : await fetchWhaleActivity();
 
-  const ranked = [...whales].sort((a, b) => (b.raw?.usdc ?? 0) - (a.raw?.usdc ?? 0));
+      // Fetch PnL for all whales in parallel, then sort by cashPnl desc
+      const pnlResults = await Promise.all(
+        whales.map((w) => fetchWhalePnl(w.raw?.addr ?? ''))
+      );
+
+      const withPnl = whales.map((w, i) => ({
+        ...w,
+        pnl: pnlResults[i],
+      })).sort((a, b) => (b.pnl?.totalCashPnl ?? -Infinity) - (a.pnl?.totalCashPnl ?? -Infinity));
+
+      setRanked(withPnl);
+      setLoading(false);
+    }
+    load();
+  }, []);
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Whale board</Text>
-        {!loading && <Text style={styles.subtitle}>{ranked.length} whales · by volume</Text>}
+        {!loading && <Text style={styles.subtitle}>{ranked.length} whales · by PnL</Text>}
       </View>
 
       {loading ? (
         <View style={styles.loadingWrap}>
           <ActivityIndicator color="#00c896" />
-          <Text style={styles.loadingText}>Loading whale rankings…</Text>
+          <Text style={styles.loadingText}>Ranking by profit…</Text>
         </View>
       ) : (
         <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
@@ -43,6 +50,9 @@ export default function LeaderboardScreen({ navigation }) {
             const shortAddr = whale.raw?.addr?.length >= 10
               ? `${whale.raw.addr.slice(0, 6)}…${whale.raw.addr.slice(-4)}`
               : whale.raw?.addr ?? '';
+            const pnlStr = whale.pnl?.formatted ?? null;
+            const pnlPos = pnlStr?.startsWith('+');
+
             return (
               <TouchableOpacity
                 key={whale.id}
@@ -62,8 +72,17 @@ export default function LeaderboardScreen({ navigation }) {
                   <Text style={styles.badge}>{whale.badge}</Text>
                 </View>
                 <View style={styles.stats}>
-                  <Text style={[styles.amount, { color: accent }]}>{whale.amount}</Text>
-                  <Text style={styles.tradeTime}>{whale.time}</Text>
+                  {pnlStr ? (
+                    <>
+                      <Text style={[styles.pnl, { color: pnlPos ? '#00c896' : '#ff5555' }]}>{pnlStr}</Text>
+                      <Text style={styles.pnlLabel}>cash PnL</Text>
+                    </>
+                  ) : (
+                    <>
+                      <Text style={[styles.pnl, { color: accent }]}>{whale.amount}</Text>
+                      <Text style={styles.pnlLabel}>volume</Text>
+                    </>
+                  )}
                 </View>
               </TouchableOpacity>
             );
@@ -92,6 +111,6 @@ const styles = StyleSheet.create({
   walletAddr: { fontSize: 9, color: '#444', fontFamily: 'monospace' },
   badge: { fontSize: 9, color: '#555' },
   stats: { alignItems: 'flex-end' },
-  amount: { fontSize: 14, fontWeight: '800' },
-  tradeTime: { fontSize: 9, color: '#444', marginTop: 2 },
+  pnl: { fontSize: 14, fontWeight: '800' },
+  pnlLabel: { fontSize: 9, color: '#444', marginTop: 2 },
 });

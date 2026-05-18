@@ -25,6 +25,9 @@ export default function WhaleProfileScreen({ route, navigation }) {
   const displayName = profile?.pseudonym ?? whale.name ?? 'Unknown Whale';
   const shortAddr = addr.length >= 10 ? `${addr.slice(0, 6)}…${addr.slice(-4)}` : addr;
 
+  const pnlValue = profile?.totalCashPnl ?? null;
+  const pnlPositive = pnlValue?.startsWith('+');
+
   return (
     <View style={styles.container}>
       <ScrollView showsVerticalScrollIndicator={false}>
@@ -46,12 +49,18 @@ export default function WhaleProfileScreen({ route, navigation }) {
               {whale.time ? `Active · Last bet ${whale.time}` : 'Status unknown'}
             </Text>
           </View>
+          {pnlValue && (
+            <View style={[styles.pnlBadge, { backgroundColor: pnlPositive ? '#0a2a1a' : '#2a0a0a' }]}>
+              <Text style={[styles.pnlBadgeLabel]}>Total PnL</Text>
+              <Text style={[styles.pnlBadgeValue, { color: pnlPositive ? '#00c896' : '#ff5555' }]}>{pnlValue}</Text>
+            </View>
+          )}
         </View>
 
         {loading ? (
           <View style={styles.loadingWrap}>
             <ActivityIndicator color={accentColor} />
-            <Text style={styles.loadingText}>Loading whale data…</Text>
+            <Text style={styles.loadingText}>Loading positions…</Text>
           </View>
         ) : error ? (
           <View style={styles.errorWrap}>
@@ -68,33 +77,19 @@ export default function WhaleProfileScreen({ route, navigation }) {
                 <Text style={[styles.statVal, { color: accentColor }]}>{profile?.biggestTrade ?? '—'}</Text>
                 <Text style={styles.statLabel}>Biggest trade</Text>
               </View>
-              {profile?.realizedPnl != null ? (
-                <View style={styles.statBox}>
-                  <Text style={[styles.statVal, { color: profile.realizedPnl.startsWith('+') ? '#00c896' : '#ff5555' }]}>{profile.realizedPnl}</Text>
-                  <Text style={styles.statLabel}>Realized PnL</Text>
-                </View>
-              ) : (
-                <View style={styles.statBox}>
-                  <Text style={[styles.statVal, { color: accentColor, fontSize: 13 }]}>{profile?.topCategory ?? whale.badge ?? '—'}</Text>
-                  <Text style={styles.statLabel}>Top category</Text>
-                </View>
-              )}
-              {profile?.unrealizedPnl != null ? (
-                <View style={styles.statBox}>
-                  <Text style={[styles.statVal, { color: profile.unrealizedPnl.startsWith('+') ? '#00c896' : '#ff5555' }]}>{profile.unrealizedPnl}</Text>
-                  <Text style={styles.statLabel}>Unrealized PnL</Text>
-                </View>
-              ) : (
-                <View style={styles.statBox}>
-                  <Text style={[styles.statVal, { color: accentColor }]}>{profile?.totalTrades ?? '—'}</Text>
-                  <Text style={styles.statLabel}>Trades fetched</Text>
-                </View>
-              )}
+              <View style={styles.statBox}>
+                <Text style={[styles.statVal, { color: accentColor, fontSize: 13 }]}>{profile?.topCategory ?? whale.badge ?? '—'}</Text>
+                <Text style={styles.statLabel}>Top category</Text>
+              </View>
+              <View style={styles.statBox}>
+                <Text style={[styles.statVal, { color: accentColor }]}>{profile?.positions?.length ?? profile?.totalTrades ?? '—'}</Text>
+                <Text style={styles.statLabel}>Positions</Text>
+              </View>
             </View>
 
             {whale.market && (
               <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Latest position</Text>
+                <Text style={styles.sectionTitle}>Latest trade</Text>
                 <View style={[styles.positionBox, { borderColor: accentColor + '33' }]}>
                   <Text style={styles.positionMarket}>{whale.market}</Text>
                   <View style={styles.positionRow}>
@@ -110,20 +105,39 @@ export default function WhaleProfileScreen({ route, navigation }) {
               </View>
             )}
 
-            {profile?.recentTrades?.length > 0 && (
+            {profile?.positions?.length > 0 && (
               <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Recent trades</Text>
+                <Text style={styles.sectionTitle}>Positions ({profile.positions.length})</Text>
                 <View style={styles.historyBox}>
-                  {profile.recentTrades.map((t, i) => {
-                    const resultColor = t.result === 'win' ? '#00c896' : t.result === 'loss' ? '#ff5555' : '#555';
-                    const resultLabel = t.result === 'win' ? t.outcome : t.result === 'loss' ? t.outcome : 'Open';
+                  {profile.positions.map((p, i) => {
+                    const isLast = i === profile.positions.length - 1;
+                    const isLost = p.status === 'LOST';
+                    const isOpen = p.status === 'OPEN';
+                    const pnlPos = p.cashPnlRaw >= 0;
+
                     return (
-                      <View key={i} style={[styles.tradeRow, i === profile.recentTrades.length - 1 && styles.tradeRowLast]}>
-                        <Text style={styles.tradeMarket} numberOfLines={1}>{t.market}</Text>
-                        <View style={styles.tradeRight}>
-                          <Text style={[styles.tradeAmount, { color: accentColor }]}>{t.amount}</Text>
-                          <Text style={[styles.tradeResult, { color: resultColor }]}>{resultLabel}</Text>
-                          <Text style={styles.tradeTime}>{t.time}</Text>
+                      <View key={i} style={[styles.posRow, isLast && styles.posRowLast]}>
+                        <View style={styles.posLeft}>
+                          <Text style={styles.posTitle} numberOfLines={2}>{p.title}</Text>
+                          <View style={styles.posMetaRow}>
+                            <Text style={styles.posOutcome}>{p.outcome}</Text>
+                            {p.initialValue && <Text style={styles.posInitial}> · {p.initialValue} in</Text>}
+                          </View>
+                        </View>
+                        <View style={styles.posRight}>
+                          {isLost ? (
+                            <Text style={styles.statusLost}>LOST</Text>
+                          ) : isOpen ? (
+                            <>
+                              <Text style={styles.statusOpen}>OPEN</Text>
+                              {p.currentValue && <Text style={styles.posCurrentVal}>{p.currentValue}</Text>}
+                            </>
+                          ) : (
+                            <>
+                              <Text style={[styles.posPnl, { color: pnlPos ? '#00c896' : '#ff5555' }]}>{p.cashPnl}</Text>
+                              <Text style={[styles.posPct, { color: pnlPos ? '#00c896' : '#ff5555' }]}>{p.pctDisplay}</Text>
+                            </>
+                          )}
                         </View>
                       </View>
                     );
@@ -151,6 +165,9 @@ const styles = StyleSheet.create({
   whaleName: { fontSize: 18, fontWeight: '800', color: '#fff' },
   walletAddr: { fontSize: 10, color: '#444', marginTop: 2, fontFamily: 'monospace' },
   whaleStatus: { fontSize: 11, color: '#555', marginTop: 3 },
+  pnlBadge: { borderRadius: 10, padding: 10, alignItems: 'flex-end' },
+  pnlBadgeLabel: { fontSize: 9, color: '#555', textTransform: 'uppercase', letterSpacing: 0.5 },
+  pnlBadgeValue: { fontSize: 18, fontWeight: '800', marginTop: 2 },
   loadingWrap: { alignItems: 'center', justifyContent: 'center', paddingVertical: 40, gap: 10 },
   loadingText: { fontSize: 12, color: '#444' },
   errorWrap: { alignItems: 'center', paddingVertical: 40 },
@@ -169,11 +186,17 @@ const styles = StyleSheet.create({
   positionAmount: { fontSize: 16, fontWeight: '800' },
   positionDate: { fontSize: 11, color: '#555', marginLeft: 'auto' },
   historyBox: { backgroundColor: '#131313', borderRadius: 12, borderWidth: 0.5, borderColor: '#1e1e1e', overflow: 'hidden' },
-  tradeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a' },
-  tradeRowLast: { borderBottomWidth: 0 },
-  tradeMarket: { flex: 1, fontSize: 11, color: '#999' },
-  tradeRight: { alignItems: 'flex-end', flexShrink: 0 },
-  tradeAmount: { fontSize: 11, fontWeight: '700' },
-  tradeResult: { fontSize: 10, fontWeight: '600', marginTop: 1 },
-  tradeTime: { fontSize: 9, color: '#444', marginTop: 1 },
+  posRow: { flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a', gap: 8 },
+  posRowLast: { borderBottomWidth: 0 },
+  posLeft: { flex: 1 },
+  posTitle: { fontSize: 11, color: '#ccc', lineHeight: 15 },
+  posMetaRow: { flexDirection: 'row', marginTop: 3 },
+  posOutcome: { fontSize: 10, color: '#00c896', fontWeight: '600' },
+  posInitial: { fontSize: 10, color: '#444' },
+  posRight: { alignItems: 'flex-end', justifyContent: 'center', minWidth: 60 },
+  posPnl: { fontSize: 12, fontWeight: '700' },
+  posPct: { fontSize: 10, marginTop: 2 },
+  statusLost: { fontSize: 11, fontWeight: '800', color: '#ff5555' },
+  statusOpen: { fontSize: 11, fontWeight: '700', color: '#555' },
+  posCurrentVal: { fontSize: 10, color: '#444', marginTop: 2 },
 });
