@@ -100,18 +100,20 @@ export default function WhaleProfileScreen({ route, navigation }) {
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>Recent trades</Text>
                 <View style={styles.historyBox}>
-                  {profile.recentTrades.map((t, i) => (
-                    <View key={i} style={[styles.tradeRow, i === profile.recentTrades.length - 1 && styles.tradeRowLast]}>
-                      <View style={[styles.dirChipSmall, { backgroundColor: t.direction === 'YES' ? '#0a2a1a' : '#2a0a0a' }]}>
-                        <Text style={[styles.dirChipText, { color: t.direction === 'YES' ? '#00c896' : '#ff5555' }]}>{t.outcome}</Text>
+                  {profile.recentTrades.map((t, i) => {
+                    const resultColor = t.result === 'win' ? '#00c896' : t.result === 'loss' ? '#ff5555' : '#555';
+                    const resultLabel = t.result === 'win' ? t.outcome : t.result === 'loss' ? t.outcome : 'Open';
+                    return (
+                      <View key={i} style={[styles.tradeRow, i === profile.recentTrades.length - 1 && styles.tradeRowLast]}>
+                        <Text style={styles.tradeMarket} numberOfLines={1}>{t.market}</Text>
+                        <View style={styles.tradeRight}>
+                          <Text style={[styles.tradeAmount, { color: accentColor }]}>{t.amount}</Text>
+                          <Text style={[styles.tradeResult, { color: resultColor }]}>{resultLabel}</Text>
+                          <Text style={styles.tradeTime}>{t.time}</Text>
+                        </View>
                       </View>
-                      <Text style={styles.tradeMarket} numberOfLines={1}>{t.market}</Text>
-                      <View style={styles.tradeRight}>
-                        <Text style={[styles.tradeAmount, { color: accentColor }]}>{t.amount}</Text>
-                        <Text style={styles.tradeTime}>{t.time}</Text>
-                      </View>
-                    </View>
-                  ))}
+                    );
+                  })}
                 </View>
               </View>
             )}
@@ -155,10 +157,9 @@ const styles = StyleSheet.create({
   historyBox: { backgroundColor: '#131313', borderRadius: 12, borderWidth: 0.5, borderColor: '#1e1e1e', overflow: 'hidden' },
   tradeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a' },
   tradeRowLast: { borderBottomWidth: 0 },
-  dirChipSmall: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, flexShrink: 0 },
-  dirChipText: { fontSize: 9, fontWeight: '700' },
   tradeMarket: { flex: 1, fontSize: 11, color: '#999' },
   tradeRight: { alignItems: 'flex-end', flexShrink: 0 },
   tradeAmount: { fontSize: 11, fontWeight: '700' },
+  tradeResult: { fontSize: 10, fontWeight: '600', marginTop: 1 },
   tradeTime: { fontSize: 9, color: '#444', marginTop: 1 },
 });

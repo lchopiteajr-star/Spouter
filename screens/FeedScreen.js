@@ -107,9 +107,7 @@ export default function FeedScreen({ navigation }) {
                   </View>
                 </View>
                 <View style={styles.cardBottom}>
-                  <Text style={styles.time}>
-                    {whale.time}{whale.eventDate ? <Text style={styles.eventDate}> · {whale.eventDate}</Text> : null}
-                  </Text>
+                  <Text style={styles.time}>{whale.eventDate ?? whale.time}</Text>
                   <Text style={[styles.stat, { color: typeColors[whale.type] }]}>{whale.stat}</Text>
                 </View>
               </TouchableOpacity>
@@ -149,7 +147,6 @@ const styles = StyleSheet.create({
   direction: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4 },
   directionText: { fontSize: 10, fontWeight: '700' },
   cardBottom: { flexDirection: 'row', justifyContent: 'space-between' },
-  time: { fontSize: 10, color: '#444' },
-  eventDate: { fontSize: 10, color: '#666' },
+  time: { fontSize: 10, color: '#555' },
   stat: { fontSize: 10 },
 });

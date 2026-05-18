@@ -101,8 +101,9 @@ function formatUsdc(n) {
 function timeAgo(unixSecs) {
   const mins = Math.round((Date.now() - unixSecs * 1000) / 60_000);
   if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins} min ago`;
-  return `${Math.round(mins / 60)} hr ago`;
+  if (mins < 60) return `${mins}m ago`;
+  if (mins < 1440) return `${Math.round(mins / 60)}h ago`;
+  return `${Math.round(mins / 1440)}d ago`;
 }
 
 // ── Map trade → whale card ────────────────────────────────────────────────────
@@ -159,6 +160,11 @@ export const MOCK_WHALES = [
   { id: 4, name: 'BTC Caller', type: 'consensus', badge: '⚡ Crypto', market: 'BTC > $100K by EOY', amount: '$1.8M', direction: 'YES', bet: 'Yes', eventDate: 'Dec 31', time: '1 hr ago', stat: 'Mega move', raw: { category: 'crypto' } },
 ];
 
+// ── Module-level cache so leaderboard can reuse feed data ────────────────────
+
+let _whaleCache = null;
+export function getCachedWhales() { return _whaleCache; }
+
 // ── Main export ───────────────────────────────────────────────────────────────
 
 export async function fetchWhaleActivity() {
@@ -195,6 +201,7 @@ export async function fetchWhaleActivity() {
       .slice(0, 8)
       .map(tradeToWhale);
 
+    _whaleCache = result;
     console.log('[Spouter] Returning', result.length, 'live whale cards');
     return result;
 
@@ -239,11 +246,18 @@ export async function fetchWhaleProfile(addr) {
   const recentTrades = trades.slice(0, 10).map((t) => {
     const usdc = extractUsdc(t);
     const outcome = t.outcome ?? (t.outcomeIndex === 0 ? 'Yes' : 'No');
+    const side = (t.side ?? '').toUpperCase();
+    const isYes = /^yes$/i.test(outcome);
+    const isNo = /^no$/i.test(outcome);
+    const isBuy = side === 'BUY';
+    let result = 'open';
+    if ((isYes && isBuy) || (isNo && !isBuy)) result = 'win';
+    else if ((isYes && !isBuy) || (isNo && isBuy)) result = 'loss';
     return {
       market: (t.title ?? 'Unknown market').slice(0, 40),
       amount: formatUsdc(usdc),
       outcome,
-      direction: /^(yes|up)/i.test(outcome) ? 'YES' : 'NO',
+      result,
       time: timeAgo(t.timestamp),
     };
   });
