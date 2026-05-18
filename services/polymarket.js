@@ -228,19 +228,23 @@ function processPositions(positions) {
   const list = positions.map((p) => {
     const cashPnl = parseFloat(p.cashPnl ?? 0);
     const percentPnl = parseFloat(p.percentPnl ?? 0);
-    const currentValue = parseFloat(p.currentValue ?? 0);
+    const curPrice = parseFloat(p.curPrice ?? p.currentValue ?? 0);
     const initialValue = parseFloat(p.initialValue ?? p.cashInvested ?? 0);
     const redeemable = p.redeemable === true;
     const endDate = p.endDate ? new Date(p.endDate) : null;
-    const isOpen = endDate ? endDate > now : false;
+    const isPast = endDate ? endDate <= now : false;
+    const isFuture = endDate ? endDate > now : false;
 
     totalCashPnl += cashPnl;
 
-    const isPast = endDate ? endDate <= now : false;
-    let status = null;
-    if (redeemable && cashPnl > 0) status = 'WON';
-    else if (redeemable || currentValue === 0 || isPast) status = 'LOST';
-    else if (isOpen) status = 'OPEN';
+    // Exact status rules — order matters
+    let status;
+    if (redeemable && cashPnl > 0)            status = 'WON';
+    else if (redeemable && cashPnl < 0)       status = 'LOST';
+    else if (redeemable && cashPnl === 0)     status = 'EVEN';
+    else if (curPrice === 0 && isPast)        status = 'LOST';
+    else if (!redeemable && isFuture)         status = 'OPEN';
+    else                                       status = null;
 
     // percentPnl may be a ratio (0.42) or already a percentage (42.0)
     const pctDisplay = `${percentPnl >= 0 ? '+' : ''}${(Math.abs(percentPnl) <= 1 ? percentPnl * 100 : percentPnl).toFixed(1)}%`;
@@ -249,7 +253,7 @@ function processPositions(positions) {
       title: (p.title ?? p.market?.title ?? 'Unknown market').slice(0, 42),
       outcome: p.outcome ?? p.outcomeTitle ?? '—',
       initialValue: initialValue > 0 ? formatUsdc(initialValue) : null,
-      currentValue: currentValue > 0 ? formatUsdc(currentValue) : null,
+      curPrice: curPrice > 0 ? formatUsdc(curPrice) : null,
       cashPnl: formatPnl(cashPnl),
       cashPnlRaw: cashPnl,
       pctDisplay,

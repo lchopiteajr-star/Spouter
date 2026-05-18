@@ -111,7 +111,8 @@ export default function WhaleProfileScreen({ route, navigation }) {
                 <View style={styles.historyBox}>
                   {profile.positions.map((p, i) => {
                     const isLast = i === profile.positions.length - 1;
-                    const pnlPos = p.cashPnlRaw >= 0;
+                    const s = p.status;
+                    const pnlColor = p.cashPnlRaw > 0 ? '#00c896' : p.cashPnlRaw < 0 ? '#ff5555' : '#555';
 
                     return (
                       <View key={i} style={[styles.posRow, isLast && styles.posRowLast]}>
@@ -123,23 +124,21 @@ export default function WhaleProfileScreen({ route, navigation }) {
                           </View>
                         </View>
                         <View style={styles.posRight}>
-                          {p.status === 'WON' ? (
-                            <>
-                              <Text style={styles.statusWon}>WON</Text>
-                              <Text style={[styles.posPnl, { color: '#00c896' }]}>{p.cashPnl}</Text>
-                            </>
-                          ) : p.status === 'LOST' ? (
-                            <Text style={styles.statusLost}>LOST</Text>
-                          ) : p.status === 'OPEN' ? (
-                            <>
-                              <Text style={styles.statusOpen}>OPEN</Text>
-                              {p.currentValue && <Text style={styles.posCurrentVal}>{p.currentValue}</Text>}
-                            </>
-                          ) : (
-                            <>
-                              <Text style={[styles.posPnl, { color: pnlPos ? '#00c896' : '#ff5555' }]}>{p.cashPnl}</Text>
-                              <Text style={[styles.posPct, { color: pnlPos ? '#00c896' : '#ff5555' }]}>{p.pctDisplay}</Text>
-                            </>
+                          {s === 'WON'  && <Text style={styles.statusWon}>WON</Text>}
+                          {s === 'LOST' && <Text style={styles.statusLost}>LOST</Text>}
+                          {s === 'EVEN' && <Text style={styles.statusEven}>EVEN</Text>}
+                          {s === 'OPEN' && <Text style={styles.statusOpen}>OPEN</Text>}
+
+                          {/* Dollar amount — always shown except EVEN/null with zero */}
+                          {s === 'OPEN' ? (
+                            p.curPrice ? <Text style={styles.posCurrentVal}>{p.curPrice}</Text> : null
+                          ) : p.cashPnlRaw !== 0 ? (
+                            <Text style={[styles.posPnl, { color: pnlColor }]}>{p.cashPnl}</Text>
+                          ) : null}
+
+                          {/* Percentage — only for non-terminal states */}
+                          {(s === null || s === undefined) && (
+                            <Text style={[styles.posPct, { color: pnlColor }]}>{p.pctDisplay}</Text>
                           )}
                         </View>
                       </View>
@@ -201,6 +200,7 @@ const styles = StyleSheet.create({
   posPct: { fontSize: 10, marginTop: 2 },
   statusWon: { fontSize: 11, fontWeight: '800', color: '#00c896' },
   statusLost: { fontSize: 11, fontWeight: '800', color: '#ff5555' },
+  statusEven: { fontSize: 11, fontWeight: '700', color: '#fff' },
   statusOpen: { fontSize: 11, fontWeight: '700', color: '#555' },
   posCurrentVal: { fontSize: 10, color: '#444', marginTop: 2 },
 });
