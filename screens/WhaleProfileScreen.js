@@ -51,7 +51,7 @@ export default function WhaleProfileScreen({ route, navigation }) {
           </View>
           {pnlValue && (
             <View style={[styles.pnlBadge, { backgroundColor: pnlPositive ? '#0a2a1a' : '#2a0a0a' }]}>
-              <Text style={[styles.pnlBadgeLabel]}>Total PnL</Text>
+              <Text style={styles.pnlBadgeLabel}>Unrealized PnL</Text>
               <Text style={[styles.pnlBadgeValue, { color: pnlPositive ? '#00c896' : '#ff5555' }]}>{pnlValue}</Text>
             </View>
           )}
@@ -111,8 +111,6 @@ export default function WhaleProfileScreen({ route, navigation }) {
                 <View style={styles.historyBox}>
                   {profile.positions.map((p, i) => {
                     const isLast = i === profile.positions.length - 1;
-                    const isLost = p.status === 'LOST';
-                    const isOpen = p.status === 'OPEN';
                     const pnlPos = p.cashPnlRaw >= 0;
 
                     return (
@@ -125,9 +123,14 @@ export default function WhaleProfileScreen({ route, navigation }) {
                           </View>
                         </View>
                         <View style={styles.posRight}>
-                          {isLost ? (
+                          {p.status === 'WON' ? (
+                            <>
+                              <Text style={styles.statusWon}>WON</Text>
+                              <Text style={[styles.posPnl, { color: '#00c896' }]}>{p.cashPnl}</Text>
+                            </>
+                          ) : p.status === 'LOST' ? (
                             <Text style={styles.statusLost}>LOST</Text>
-                          ) : isOpen ? (
+                          ) : p.status === 'OPEN' ? (
                             <>
                               <Text style={styles.statusOpen}>OPEN</Text>
                               {p.currentValue && <Text style={styles.posCurrentVal}>{p.currentValue}</Text>}
@@ -196,6 +199,7 @@ const styles = StyleSheet.create({
   posRight: { alignItems: 'flex-end', justifyContent: 'center', minWidth: 60 },
   posPnl: { fontSize: 12, fontWeight: '700' },
   posPct: { fontSize: 10, marginTop: 2 },
+  statusWon: { fontSize: 11, fontWeight: '800', color: '#00c896' },
   statusLost: { fontSize: 11, fontWeight: '800', color: '#ff5555' },
   statusOpen: { fontSize: 11, fontWeight: '700', color: '#555' },
   posCurrentVal: { fontSize: 10, color: '#444', marginTop: 2 },

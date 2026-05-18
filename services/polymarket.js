@@ -18,6 +18,8 @@ const CATEGORY_RULES = [
   { category: 'entertainment', re: /oscar|emmy|grammy|golden globe|netflix|hulu|disney|movie|film|box office|album|song|music|taylor swift|kanye|beyonce|celebrity|hollywood|tv show|television|season|episode|streaming|award show|actor|actress|kardashian/i },
   // Sports — broad: leagues, terms, and enough team/player signals to catch most markets
   { category: 'sports', re: /nfl|nba|nhl|mlb|ufc|mma|f1|formula 1|premier league|champions league|world cup|super bowl|playoffs|championship|tournament|moneyline|spread|over under|\bwin\b|game 7|series|match|vs\.|cavalier|laker|celtics|warriors|heat|knicks|bulls|pistons|bucks|suns|nuggets|pacers|thunder|nets|spurs|maverick|hawk|magic|wolf|grizzl|rocket|jazz|clipper|pelican|hornet|blazer|king|pistons|patriot|chief|eagle|cowboy|packers|49er|bear|lion|falcon|raider|bronco|dolphin|jet|giant|charger|steeler|browns|raven|texan|colts|titan|jaguar|bengal|viking|saint|buccaneer|panther|seahawk|ram|\bfc\b|\bsc\b|\bunited\b|city fc|arsenal|chelsea|liverpool|barcelona|madrid|psg|bayern|juventus|milan|tennis|golf|ufc|boxing|wrestling|nascar|moto|tour de france|wimbledon|grand slam|open|masters|pga|lpga|soccer|football|rugby|cricket|baseball|basketball|hockey|volleyball|swimming|athletics|marathon/i },
+  // Other — explicit signals that should never bleed into above categories
+  { category: 'other', re: /temperature|weather|seoul|science|space|nasa|climate|earthquake|volcano|hurricane|asteroid|species|population|gdp|recession|inflation|interest rate/i },
 ];
 
 function detectCategory(question = '') {
@@ -138,7 +140,7 @@ function tradeToWhale(trade, index) {
 
   const categoryBadge = {
     crypto: '⚡ Crypto', politics: '🏛 Politics',
-    sports: '⚽ Sports', entertainment: '🎬 Entertainment', other: '📊 Market',
+    sports: '⚽ Sports', entertainment: '🎬 Entertainment', other: '📊 Other',
   }[category];
 
   return {
@@ -161,7 +163,7 @@ function tradeToWhale(trade, index) {
 
 export const MOCK_WHALES = [
   { id: 1, name: 'Whale #3', type: 'active', badge: '⚽ Sports', market: 'Brazil World Cup', amount: '$280K', direction: 'YES', bet: 'Brazil to win', eventDate: 'Jun 14', time: '2 min ago', stat: 'Large position', raw: { category: 'sports' } },
-  { id: 2, name: 'Ghost wallet', type: 'ghost', badge: '📊 Market', market: 'Chimaev to win', amount: '$500K', direction: 'YES', bet: 'Yes', eventDate: null, time: '8 min ago', stat: 'Big bet', raw: { category: 'other' } },
+  { id: 2, name: 'Ghost wallet', type: 'ghost', badge: '📊 Other', market: 'Chimaev to win', amount: '$500K', direction: 'YES', bet: 'Yes', eventDate: null, time: '8 min ago', stat: 'Big bet', raw: { category: 'other' } },
   { id: 3, name: 'Whale #7', type: 'dormant', badge: '🏛 Politics', market: 'Trump 2026 midterms', amount: '$900K', direction: 'NO', bet: 'No', eventDate: 'Nov 3', time: '22 min ago', stat: 'Whale bet', raw: { category: 'politics' } },
   { id: 4, name: 'BTC Caller', type: 'consensus', badge: '⚡ Crypto', market: 'BTC > $100K by EOY', amount: '$1.8M', direction: 'YES', bet: 'Yes', eventDate: 'Dec 31', time: '1 hr ago', stat: 'Mega move', raw: { category: 'crypto' } },
 ];
@@ -234,8 +236,10 @@ function processPositions(positions) {
 
     totalCashPnl += cashPnl;
 
+    const isPast = endDate ? endDate <= now : false;
     let status = null;
-    if (currentValue === 0 && redeemable) status = 'LOST';
+    if (redeemable && cashPnl > 0) status = 'WON';
+    else if (redeemable || currentValue === 0 || isPast) status = 'LOST';
     else if (isOpen) status = 'OPEN';
 
     // percentPnl may be a ratio (0.42) or already a percentage (42.0)
@@ -285,7 +289,7 @@ export async function fetchWhaleProfile(addr) {
     catCounts[cat] = (catCounts[cat] ?? 0) + 1;
   }
   const topCat = Object.entries(catCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'other';
-  const topCatLabel = { crypto: '⚡ Crypto', politics: '🏛 Politics', sports: '⚽ Sports', entertainment: '🎬 Entertainment', other: '📊 Market' }[topCat];
+  const topCatLabel = { crypto: '⚡ Crypto', politics: '🏛 Politics', sports: '⚽ Sports', entertainment: '🎬 Entertainment', other: '📊 Other' }[topCat];
 
   const { list: positionList, totalCashPnl } = processPositions(positions);
 
