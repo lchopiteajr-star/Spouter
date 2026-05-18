@@ -29,6 +29,39 @@ function detectCategory(question = '') {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+const MONTH_MAP = { jan:0, feb:1, mar:2, apr:3, may:4, jun:5, jul:6, aug:7, sep:8, oct:9, nov:10, dec:11 };
+
+function isPastMarket(title = '') {
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+
+  // ISO date: 2026-05-17
+  const iso = title.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+  if (iso) {
+    const d = new Date(parseInt(iso[1]), parseInt(iso[2]) - 1, parseInt(iso[3]));
+    if (d < now) return true;
+  }
+
+  // "May 17" or "May 17, 2026"
+  const mdy = title.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:,?\s*(\d{4}))?/i);
+  if (mdy) {
+    const month = MONTH_MAP[mdy[1].toLowerCase().slice(0, 3)];
+    const day = parseInt(mdy[2]);
+    const year = mdy[3] ? parseInt(mdy[3]) : now.getFullYear();
+    const d = new Date(year, month, day);
+    if (d < now) return true;
+  }
+
+  return false;
+}
+
+function formatBet(outcome, category) {
+  if (category === 'sports' && !/^(yes|no|up|down|over|under|higher|lower|\d)/i.test(outcome)) {
+    return `${outcome} to win`;
+  }
+  return outcome;
+}
+
 // size = shares, price = $/share → USDC = size × price (confirmed from logs)
 function extractUsdc(trade) {
   return parseFloat(trade.size ?? 0) * parseFloat(trade.price ?? 0);
@@ -85,8 +118,7 @@ function tradeToWhale(trade, index) {
   const rawOutcome = trade.outcome ?? (trade.outcomeIndex === 0 ? 'Yes' : 'No');
   // direction drives chip color; YES = green for Yes/Up/team picks, NO = red for No/Down
   const direction = /^(yes|up)/i.test(rawOutcome) ? 'YES' : 'NO';
-  // bet is the human-readable label shown on the card
-  const bet = rawOutcome;
+  const bet = formatBet(rawOutcome, category);
 
   let type = 'dormant';
   let stat = 'Whale bet';
@@ -136,9 +168,18 @@ export async function fetchWhaleActivity() {
       return MOCK_WHALES;
     }
 
+    // Filter out markets with dates that have already passed
+    const activeTrades = trades.filter((t) => !isPastMarket(t.title ?? ''));
+    console.log('[Spouter] After past-market filter:', activeTrades.length, '/', trades.length);
+
+    if (!activeTrades.length) {
+      console.log('[Spouter] All trades filtered out, going mock');
+      return MOCK_WHALES;
+    }
+
     // Deduplicate by wallet — keep largest trade per address
     const byAddr = new Map();
-    for (const t of trades) {
+    for (const t of activeTrades) {
       const addr = t.proxyWallet ?? t.transactionHash ?? `anon-${Math.random()}`;
       const usdc = extractUsdc(t);
       if (!byAddr.has(addr) || usdc > extractUsdc(byAddr.get(addr))) {
