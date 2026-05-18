@@ -16,13 +16,14 @@ const typeBackground = {
   consensus: '#0a1408',
 };
 
-const FILTERS = ['All', 'Sports', 'Crypto', 'UFC', 'Politics'];
+const FILTERS = ['All', 'Sports', 'Crypto', 'Politics', 'Entertainment'];
 
 const categoryToFilter = {
   sports: 'Sports',
+  ufc: 'Sports',
   crypto: 'Crypto',
-  ufc: 'UFC',
   politics: 'Politics',
+  entertainment: 'Entertainment',
 };
 
 export default function FeedScreen({ navigation }) {
