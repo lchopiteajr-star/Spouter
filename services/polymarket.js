@@ -1,7 +1,8 @@
 // Data source: Polymarket Gamma API (confirmed working)
 //   Markets: GET /markets?limit=50&order=volume&ascending=false
-//   Trades:  GET /trades?market={id}&limit=20
+//   Trades:  URL format TBD — probed at runtime
 const GAMMA_BASE = 'https://gamma-api.polymarket.com';
+const DATA_API_BASE = 'https://data-api.polymarket.com';
 
 const WHALE_THRESHOLD_USDC = 1_000;
 
@@ -19,12 +20,59 @@ async function fetchTopMarkets(limit = 50) {
   return list;
 }
 
-async function fetchTradesForMarket(marketId) {
-  const url = `${GAMMA_BASE}/trades?market=${marketId}&limit=20`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Gamma trades HTTP ${res.status}`);
-  const data = await res.json();
-  return Array.isArray(data) ? data : data.data ?? data.trades ?? [];
+// Probe all candidate URL formats on the first call; reuse the winner for the rest.
+let workingTradesUrl = null; // pattern string, e.g. 'gamma-conditionId'
+
+const TRADE_URL_BUILDERS = [
+  (m) => ({ tag: 'gamma-conditionId', url: `${GAMMA_BASE}/trades?conditionId=${m.conditionId ?? m.condition_id}&limit=20` }),
+  (m) => ({ tag: 'gamma-market-numeric', url: `${GAMMA_BASE}/markets/${m.id}/trades?limit=20` }),
+  (m) => ({ tag: 'data-api-market-numeric', url: `${DATA_API_BASE}/trades?market=${m.id}&limit=20` }),
+  (m) => ({ tag: 'data-api-conditionId', url: `${DATA_API_BASE}/trades?market=${m.conditionId ?? m.condition_id}&limit=20` }),
+];
+
+async function probeTradesUrl(market) {
+  for (const builder of TRADE_URL_BUILDERS) {
+    const { tag, url } = builder(market);
+    console.log(`[Spouter] Probing [${tag}]:`, url);
+    try {
+      const res = await fetch(url);
+      console.log(`[Spouter] [${tag}] → HTTP ${res.status}`);
+      if (res.ok) {
+        const text = await res.text();
+        console.log(`[Spouter] [${tag}] raw (first 300):`, text.slice(0, 300));
+        const data = JSON.parse(text);
+        const trades = Array.isArray(data) ? data : data.data ?? data.trades ?? [];
+        console.log(`[Spouter] [${tag}] trade count:`, trades.length);
+        if (trades[0]) console.log(`[Spouter] [${tag}] first trade:`, JSON.stringify(trades[0]));
+        workingTradesUrl = tag;
+        return { tag, trades };
+      }
+    } catch (e) {
+      console.log(`[Spouter] [${tag}] ERROR:`, e.message);
+    }
+  }
+  console.log('[Spouter] All URL formats failed');
+  return { tag: null, trades: [] };
+}
+
+async function fetchTradesForMarket(market) {
+  if (!workingTradesUrl) {
+    // First call — probe to find the working URL format
+    const { trades } = await probeTradesUrl(market);
+    return trades;
+  }
+  // Subsequent calls — use confirmed format directly
+  const builder = TRADE_URL_BUILDERS.find((b) => b(market).tag === workingTradesUrl);
+  if (!builder) return [];
+  const { url } = builder(market);
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : data.data ?? data.trades ?? [];
+  } catch {
+    return [];
+  }
 }
 
 function detectCategory(question = '') {
@@ -143,20 +191,17 @@ export async function fetchWhaleActivity() {
       return MOCK_WHALES;
     }
 
-    // Resolve the ID field to use for the trades endpoint
-    // Gamma markets may use 'id', 'slug', 'conditionId' — log and detect
-    const sampleMarket = markets[0];
-    const marketIdField = sampleMarket.id != null ? 'id'
-      : sampleMarket.conditionId != null ? 'conditionId'
-      : sampleMarket.condition_id != null ? 'condition_id'
-      : 'slug';
-    console.log('[Spouter] Using market ID field:', marketIdField, '→', sampleMarket[marketIdField]);
-
-    // Step 2: fetch trades for top 15 markets in parallel
+    // Step 2: probe first market to find working URL format, then batch the rest
     const top15 = markets.slice(0, 15);
-    const batches = await Promise.allSettled(
-      top15.map((m) => fetchTradesForMarket(m[marketIdField]))
+    // First call is sequential (probe); rest run in parallel once format is known
+    const firstTrades = await fetchTradesForMarket(top15[0]);
+    const restBatches = await Promise.allSettled(
+      top15.slice(1).map((m) => fetchTradesForMarket(m))
     );
+    const batches = [
+      { status: 'fulfilled', value: firstTrades },
+      ...restBatches,
+    ];
 
     batches.forEach((r, i) => {
       if (r.status === 'fulfilled') {
