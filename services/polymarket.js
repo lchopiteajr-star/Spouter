@@ -82,7 +82,7 @@ function tradeToWhale(trade, index) {
   const question = trade.title ?? trade.question ?? trade.market?.question ?? trade.market?.title ?? '';
   const category = detectCategory(question);
   const addr = trade.proxyWallet ?? trade.maker ?? trade.user ?? trade.trader ?? trade.owner ?? '';
-  const name = trade.pseudonym ?? trade.name ?? trade.username ?? shortenAddress(addr) || `Whale #${index + 1}`;
+  const name = (trade.pseudonym ?? trade.name ?? trade.username ?? shortenAddress(addr)) || `Whale #${index + 1}`;
   const outcome = String(trade.outcome ?? trade.side ?? '');
   const direction = /^y|^yes|^buy/i.test(outcome) ? 'YES' : 'NO';
   const ts = trade.timestamp ?? trade.createdAt ?? trade.created_at ?? trade.matchTime ?? trade.match_time;
