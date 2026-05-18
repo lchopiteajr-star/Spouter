@@ -140,34 +140,63 @@ export const MOCK_WHALES = [
 ];
 
 export async function fetchWhaleActivity() {
+  console.log('[Spouter] fetchWhaleActivity START');
   try {
     // Step 1: get top markets to watch
-    const markets = await fetchTopMarkets(8);
+    console.log('[Spouter] Step 1: fetching markets from Gamma API...');
+    let markets;
+    try {
+      markets = await fetchTopMarkets(8);
+    } catch (e) {
+      console.log('[Spouter] Step 1 FAILED:', e.message);
+      return MOCK_WHALES;
+    }
+    console.log('[Spouter] Step 1 OK — markets count:', markets.length);
+    console.log('[Spouter] Step 1 sample:', JSON.stringify(markets[0]));
+
     if (!markets.length) {
-      console.warn('[Spouter] Gamma API returned no markets');
+      console.log('[Spouter] Step 1: no markets returned, going to mock');
       return MOCK_WHALES;
     }
 
     // Step 2: fetch trade events for all markets in parallel
+    console.log('[Spouter] Step 2: fetching trade events for', markets.length, 'markets...');
     const eventBatches = await Promise.allSettled(
       markets.map((m) => fetchMarketTradeEvents(m.conditionId))
     );
+    eventBatches.forEach((r, i) => {
+      if (r.status === 'fulfilled') {
+        console.log(`[Spouter] Step 2 market[${i}] OK — events:`, r.value.length, '| sample:', JSON.stringify(r.value[0]));
+      } else {
+        console.log(`[Spouter] Step 2 market[${i}] FAILED:`, r.reason?.message);
+      }
+    });
 
-    // Flatten all events from successful fetches
     const allEvents = eventBatches.flatMap((r) =>
       r.status === 'fulfilled' ? r.value : []
     );
+    console.log('[Spouter] Step 2: total events across all markets:', allEvents.length);
 
     if (!allEvents.length) {
-      console.warn('[Spouter] No trade events returned from any market');
+      console.log('[Spouter] Step 2: no events at all, going to mock');
       return MOCK_WHALES;
     }
 
     // Step 3: filter for whale-sized trades
+    const sample = allEvents[0];
+    console.log('[Spouter] Step 3: first raw event keys:', Object.keys(sample));
+    console.log('[Spouter] Step 3: first raw event:', JSON.stringify(sample));
+    console.log('[Spouter] Step 3: computed usdcValue for first event:', usdcValue(sample));
+
     const whaleEvents = allEvents.filter((e) => usdcValue(e) >= WHALE_THRESHOLD_USDC);
+    console.log(`[Spouter] Step 3: events >= $${WHALE_THRESHOLD_USDC}: ${whaleEvents.length} / ${allEvents.length}`);
+    if (allEvents.length > 0) {
+      const topUsdc = allEvents.map(usdcValue).sort((a, b) => b - a).slice(0, 5);
+      console.log('[Spouter] Step 3: top 5 USDC values seen:', topUsdc.map((v) => `$${Math.round(v)}`).join(', '));
+    }
 
     if (!whaleEvents.length) {
-      console.warn(`[Spouter] No trades >= $${WHALE_THRESHOLD_USDC} found in ${allEvents.length} events`);
+      console.log('[Spouter] Step 3: nothing above threshold, going to mock');
       return MOCK_WHALES;
     }
 
@@ -180,15 +209,18 @@ export async function fetchWhaleActivity() {
         byAddr.set(addr, e);
       }
     }
+    console.log('[Spouter] Step 4: unique wallets after dedup:', byAddr.size);
 
     // Step 5: sort by USDC size descending, take top 8
-    return [...byAddr.values()]
+    const result = [...byAddr.values()]
       .sort((a, b) => usdcValue(b) - usdcValue(a))
       .slice(0, 8)
       .map(eventToWhale);
+    console.log('[Spouter] Step 5: returning', result.length, 'live whale cards');
+    return result;
 
   } catch (err) {
-    console.warn('[Spouter] API error, falling back to mock data:', err.message);
+    console.log('[Spouter] UNEXPECTED ERROR:', err.message, err.stack);
     return MOCK_WHALES;
   }
 }
