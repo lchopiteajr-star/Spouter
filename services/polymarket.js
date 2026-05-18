@@ -204,6 +204,53 @@ export async function fetchWhaleActivity() {
   }
 }
 
+// ── Whale profile ─────────────────────────────────────────────────────────────
+
+export async function fetchWhaleProfile(addr) {
+  if (!addr) return null;
+  const url = `${DATA_API_BASE}/trades?user=${addr}&limit=50`;
+  console.log('[Spouter] Profile fetch:', url);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  const trades = Array.isArray(data) ? data : data.data ?? data.trades ?? [];
+  if (!trades.length) return null;
+
+  const pseudonym = trades[0]?.pseudonym ?? trades[0]?.name ?? null;
+
+  let totalVolume = 0;
+  let biggestTrade = 0;
+  const catCounts = {};
+
+  for (const t of trades) {
+    const usdc = extractUsdc(t);
+    totalVolume += usdc;
+    if (usdc > biggestTrade) biggestTrade = usdc;
+    const cat = detectCategory(t.title ?? '');
+    catCounts[cat] = (catCounts[cat] ?? 0) + 1;
+  }
+
+  const topCat = Object.entries(catCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'other';
+  const topCatLabel = {
+    crypto: '⚡ Crypto', politics: '🏛 Politics',
+    sports: '⚽ Sports', entertainment: '🎬 Entertainment', other: '📊 Market',
+  }[topCat];
+
+  const recentTrades = trades.slice(0, 10).map((t) => {
+    const usdc = extractUsdc(t);
+    const outcome = t.outcome ?? (t.outcomeIndex === 0 ? 'Yes' : 'No');
+    return {
+      market: (t.title ?? 'Unknown market').slice(0, 40),
+      amount: formatUsdc(usdc),
+      outcome,
+      direction: /^(yes|up)/i.test(outcome) ? 'YES' : 'NO',
+      time: timeAgo(t.timestamp),
+    };
+  });
+
+  return { pseudonym, totalVolume: formatUsdc(totalVolume), biggestTrade: formatUsdc(biggestTrade), topCategory: topCatLabel, totalTrades: trades.length, recentTrades };
+}
+
 // ── Fetch whale trades ────────────────────────────────────────────────────────
 
 async function fetchWhaleTrades() {
