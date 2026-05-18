@@ -31,12 +31,19 @@ export default function FeedScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeFilter, setActiveFilter] = useState('All');
+  const [error, setError] = useState(null);
 
   const load = useCallback(async () => {
-    const data = await fetchWhaleActivity();
-    setWhales(data);
-    setLoading(false);
-    setRefreshing(false);
+    try {
+      setError(null);
+      const data = await fetchWhaleActivity();
+      setWhales(data);
+    } catch (e) {
+      setError('Could not load whale activity.');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -73,6 +80,13 @@ export default function FeedScreen({ navigation }) {
           <ActivityIndicator color="#00c896" />
           <Text style={styles.loadingText}>Scanning whale activity…</Text>
         </View>
+      ) : error ? (
+        <View style={styles.loadingWrap}>
+          <Text style={styles.errorText}>{error}</Text>
+          <TouchableOpacity onPress={() => { setLoading(true); load(); }} style={styles.retryBtn}>
+            <Text style={styles.retryText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
       ) : (
         <ScrollView
           style={styles.feed}
@@ -82,17 +96,20 @@ export default function FeedScreen({ navigation }) {
           {filtered.length === 0 ? (
             <Text style={styles.emptyText}>No whale activity in this category right now.</Text>
           ) : (
-            filtered.map((whale) => (
+            filtered.map((whale) => {
+              const cardColor = typeColors[whale.type] ?? '#00c896';
+              const cardBg = typeBackground[whale.type] ?? '#0b1612';
+              return (
               <TouchableOpacity
-                key={whale.id}
-                style={[styles.card, { backgroundColor: typeBackground[whale.type], borderColor: typeColors[whale.type] + '44' }]}
+                key={whale.id ?? whale.name}
+                style={[styles.card, { backgroundColor: cardBg, borderColor: cardColor + '44' }]}
                 onPress={() => navigation.navigate('WhaleProfile', { whale })}
                 activeOpacity={0.75}
               >
                 <View style={styles.cardTop}>
                   <Text style={styles.whaleName}>{whale.name}</Text>
-                  <View style={[styles.badge, { backgroundColor: typeColors[whale.type] + '22' }]}>
-                    <Text style={[styles.badgeText, { color: typeColors[whale.type] }]}>{whale.badge}</Text>
+                  <View style={[styles.badge, { backgroundColor: cardColor + '22' }]}>
+                    <Text style={[styles.badgeText, { color: cardColor }]}>{whale.badge ?? '📊 Other'}</Text>
                   </View>
                 </View>
                 <View style={styles.cardMid}>
@@ -102,16 +119,17 @@ export default function FeedScreen({ navigation }) {
                 <View style={styles.cardBet}>
                   <View style={[styles.direction, { backgroundColor: whale.direction === 'YES' ? '#0a2a1a' : '#2a0a0a' }]}>
                     <Text style={[styles.directionText, { color: whale.direction === 'YES' ? '#00c896' : '#ff5555' }]}>
-                      Bet: {whale.bet ?? whale.direction}
+                      {whale.bet ?? whale.direction}
                     </Text>
                   </View>
                 </View>
                 <View style={styles.cardBottom}>
                   <Text style={styles.time}>{whale.eventDate ?? whale.time}</Text>
-                  <Text style={[styles.stat, { color: typeColors[whale.type] }]}>{whale.stat}</Text>
+                  <Text style={[styles.stat, { color: cardColor }]}>{whale.stat}</Text>
                 </View>
               </TouchableOpacity>
-            ))
+              );
+            })
           )}
           <View style={{ height: 20 }} />
         </ScrollView>
@@ -135,6 +153,9 @@ const styles = StyleSheet.create({
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10 },
   loadingText: { fontSize: 12, color: '#444' },
   emptyText: { color: '#444', fontSize: 12, textAlign: 'center', marginTop: 40 },
+  errorText: { color: '#555', fontSize: 13, marginBottom: 16 },
+  retryBtn: { paddingHorizontal: 20, paddingVertical: 8, borderRadius: 8, borderWidth: 0.5, borderColor: '#00c896' },
+  retryText: { color: '#00c896', fontSize: 12, fontWeight: '600' },
   card: { borderRadius: 14, padding: 12, marginBottom: 8, borderWidth: 0.5 },
   cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
   whaleName: { fontSize: 13, fontWeight: '700', color: '#fff' },

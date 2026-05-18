@@ -51,7 +51,7 @@ export default function WhaleProfileScreen({ route, navigation }) {
           </View>
           {pnlValue && (
             <View style={[styles.pnlBadge, { backgroundColor: pnlPositive ? '#0a2a1a' : '#2a0a0a' }]}>
-              <Text style={styles.pnlBadgeLabel}>Unrealized PnL</Text>
+              <Text style={styles.pnlBadgeLabel}>Total PnL</Text>
               <Text style={[styles.pnlBadgeValue, { color: pnlPositive ? '#00c896' : '#ff5555' }]}>{pnlValue}</Text>
             </View>
           )}
@@ -65,6 +65,10 @@ export default function WhaleProfileScreen({ route, navigation }) {
         ) : error ? (
           <View style={styles.errorWrap}>
             <Text style={styles.errorText}>Could not load profile</Text>
+          </View>
+        ) : !profile ? (
+          <View style={styles.errorWrap}>
+            <Text style={styles.errorText}>No data found for this wallet</Text>
           </View>
         ) : (
           <>

@@ -8,24 +8,30 @@ const ACCENT_BG = { active: '#0a2a1a', ghost: '#0b1220', dormant: '#0c0a18', con
 export default function LeaderboardScreen({ navigation }) {
   const [ranked, setRanked] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     async function load() {
-      const cached = getCachedWhales();
-      const whales = cached?.length ? cached : await fetchWhaleActivity();
+      try {
+        setError(null);
+        const cached = getCachedWhales();
+        const whales = cached?.length ? cached : await fetchWhaleActivity();
 
-      // Fetch PnL for all whales in parallel, then sort by cashPnl desc
-      const pnlResults = await Promise.all(
-        whales.map((w) => fetchWhalePnl(w.raw?.addr ?? ''))
-      );
+        const pnlResults = await Promise.all(
+          whales.map((w) => fetchWhalePnl(w.raw?.addr ?? ''))
+        );
 
-      const withPnl = whales.map((w, i) => ({
-        ...w,
-        pnl: pnlResults[i],
-      })).sort((a, b) => (b.pnl?.totalCashPnl ?? -Infinity) - (a.pnl?.totalCashPnl ?? -Infinity));
+        const withPnl = whales.map((w, i) => ({
+          ...w,
+          pnl: pnlResults[i],
+        })).sort((a, b) => (b.pnl?.totalCashPnl ?? -Infinity) - (a.pnl?.totalCashPnl ?? -Infinity));
 
-      setRanked(withPnl);
-      setLoading(false);
+        setRanked(withPnl);
+      } catch {
+        setError('Could not load leaderboard.');
+      } finally {
+        setLoading(false);
+      }
     }
     load();
   }, []);
@@ -41,6 +47,14 @@ export default function LeaderboardScreen({ navigation }) {
         <View style={styles.loadingWrap}>
           <ActivityIndicator color="#00c896" />
           <Text style={styles.loadingText}>Ranking by profit…</Text>
+        </View>
+      ) : error ? (
+        <View style={styles.loadingWrap}>
+          <Text style={styles.errorText}>{error}</Text>
+        </View>
+      ) : ranked.length === 0 ? (
+        <View style={styles.loadingWrap}>
+          <Text style={styles.errorText}>No whale data available.</Text>
         </View>
       ) : (
         <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
@@ -69,7 +83,7 @@ export default function LeaderboardScreen({ navigation }) {
                 <View style={styles.info}>
                   <Text style={styles.whaleName}>{whale.name}</Text>
                   {shortAddr ? <Text style={styles.walletAddr}>{shortAddr}</Text> : null}
-                  <Text style={styles.badge}>{whale.badge}</Text>
+                  <Text style={styles.badge}>{whale.badge ?? '📊 Other'}</Text>
                 </View>
                 <View style={styles.stats}>
                   {pnlStr ? (
@@ -101,6 +115,7 @@ const styles = StyleSheet.create({
   subtitle: { fontSize: 11, color: '#555', marginTop: 3 },
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10 },
   loadingText: { fontSize: 12, color: '#444' },
+  errorText: { fontSize: 13, color: '#555', textAlign: 'center' },
   list: { flex: 1 },
   row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 0.5, borderBottomColor: '#141414' },
   rank: { fontSize: 13, fontWeight: '800', width: 30 },
