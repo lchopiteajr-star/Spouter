@@ -171,13 +171,37 @@ export async function fetchWhaleActivity() {
       return MOCK_WHALES;
     }
 
-    // Cheap pre-filter: drop markets whose title contains a past date
-    const datePassed = trades.filter((t) => !isPastMarket(t.title ?? ''));
-    console.log('[Spouter] After past-market filter:', datePassed.length, '/', trades.length);
+    // Fetch Gamma once for all unique conditionIds — keep only active+open markets
+    const allConditionIds = [...new Set(trades.map((t) => t.conditionId).filter(Boolean))];
+    console.log('[Spouter] Fetching Gamma for', allConditionIds.length, 'conditionIds');
+    let openIds = new Set();
+    try {
+      const url = `https://gamma-api.polymarket.com/markets?conditionIds=${allConditionIds.join(',')}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        const list = Array.isArray(data) ? data : data.data ?? [];
+        list.forEach((m) => {
+          if (m.active === true && m.closed === false) {
+            openIds.add(m.conditionId);
+          }
+        });
+        console.log('[Spouter] Open markets from Gamma:', openIds.size, '/', list.length);
+      } else {
+        console.log('[Spouter] Gamma HTTP', res.status, '— skipping filter');
+      }
+    } catch (err) {
+      console.log('[Spouter] Gamma error:', err.message, '— skipping filter');
+    }
+
+    const filtered = openIds.size > 0
+      ? trades.filter((t) => t.conditionId && openIds.has(t.conditionId))
+      : trades.filter((t) => !isPastMarket(t.title ?? ''));
+    console.log('[Spouter] Trades after open-market filter:', filtered.length);
 
     // Deduplicate by wallet — keep largest trade per address
     const byAddr = new Map();
-    for (const t of datePassed) {
+    for (const t of filtered) {
       const addr = t.proxyWallet ?? t.transactionHash ?? `anon-${Math.random()}`;
       const usdc = extractUsdc(t);
       if (!byAddr.has(addr) || usdc > extractUsdc(byAddr.get(addr))) {
@@ -185,6 +209,11 @@ export async function fetchWhaleActivity() {
       }
     }
     console.log('[Spouter] Unique wallets:', byAddr.size);
+
+    if (!byAddr.size) {
+      console.log('[Spouter] No candidates, going mock');
+      return MOCK_WHALES;
+    }
 
     const result = [...byAddr.values()]
       .sort((a, b) => extractUsdc(b) - extractUsdc(a))
