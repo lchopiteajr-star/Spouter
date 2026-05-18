@@ -4,7 +4,7 @@
 const GAMMA_BASE = 'https://gamma-api.polymarket.com';
 const DATA_API_BASE = 'https://data-api.polymarket.com';
 
-const WHALE_THRESHOLD_USDC = 1_000;
+const WHALE_THRESHOLD_USDC = 100;
 
 async function fetchTopMarkets(limit = 50) {
   const url = `${GAMMA_BASE}/markets?limit=${limit}&order=volume&ascending=false&active=true&closed=false`;
@@ -192,11 +192,11 @@ export async function fetchWhaleActivity() {
     }
 
     // Step 2: probe first market to find working URL format, then batch the rest
-    const top15 = markets.slice(0, 15);
+    const top50 = markets.slice(0, 50);
     // First call is sequential (probe); rest run in parallel once format is known
-    const firstTrades = await fetchTradesForMarket(top15[0]);
+    const firstTrades = await fetchTradesForMarket(top50[0]);
     const restBatches = await Promise.allSettled(
-      top15.slice(1).map((m) => fetchTradesForMarket(m))
+      top50.slice(1).map((m) => fetchTradesForMarket(m))
     );
     const batches = [
       { status: 'fulfilled', value: firstTrades },
@@ -220,7 +220,7 @@ export async function fetchWhaleActivity() {
       r.status === 'fulfilled'
         ? r.value.map((trade) => ({
             trade,
-            question: top15[i].question ?? top15[i].title ?? '',
+            question: top50[i].question ?? top50[i].title ?? '',
           }))
         : []
     );
