@@ -1,4 +1,4 @@
-// BUILD v3 — address resolution via trades feed + closed-position fallback
+// BUILD v4 — address resolution via trades feed + closed-position fallback
 import {
   StyleSheet, Text, View, ScrollView, TouchableOpacity,
   ActivityIndicator, Dimensions,
@@ -6,7 +6,7 @@ import {
 import { useState, useEffect, useRef } from 'react';
 import Svg, { Polyline, Defs, LinearGradient, Stop, Path } from 'react-native-svg';
 
-console.log('=== WhaleProfileScreen BUILD v3 loaded ===');
+console.log('=== WhaleProfileScreen BUILD v4 loaded ===');
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -169,9 +169,13 @@ async function resolveProxyWallet() {
 // ── Fetch positions for a given address, trying open then closed ──────────────
 
 async function fetchPositions(addr) {
+  // Try both open and closed in parallel — anoin123 may have zero OPEN positions
+  // (all markets resolved), so closed=true is equally important on first load.
+  // No sizeThreshold — it was silently filtering everything.
   const variants = [
     { url: `https://data-api.polymarket.com/positions?user=${addr}&limit=200`, closed: false },
     { url: `https://data-api.polymarket.com/positions?user=${addr}&limit=200&closed=true`, closed: true },
+    { url: `https://data-api.polymarket.com/positions?user=${addr}&limit=500&closed=true`, closed: true },
   ];
 
   const results = await Promise.all(

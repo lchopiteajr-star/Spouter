@@ -1,3 +1,4 @@
+// v4 — force full rebundle
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -6,6 +7,8 @@ import { StatusBar } from 'expo-status-bar';
 import FeedScreen from './screens/FeedScreen';
 import LeaderboardScreen from './screens/LeaderboardScreen';
 import WhaleProfileScreen from './screens/WhaleProfileScreen';
+
+console.log('=== App.js v4 loaded — fresh bundle confirmed ===');
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
