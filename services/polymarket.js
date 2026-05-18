@@ -7,7 +7,7 @@
 const GAMMA_BASE = 'https://gamma-api.polymarket.com';
 const DATA_API_BASE = 'https://data-api.polymarket.com';
 
-const WHALE_THRESHOLD_USDC = 1_000;
+const WHALE_THRESHOLD_USDC = 200;
 
 // 5-minute/15-minute up-down micro markets — these dominate recent trades
 // but have tiny dollar amounts; exclude them to surface real whale markets
