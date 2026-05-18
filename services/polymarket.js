@@ -135,51 +135,34 @@ export function scoreColor(score) {
   return '#666';
 }
 
-// ── Fetch raw whale trades ────────────────────────────────────────────────────
+// ── Static whale roster (single wallet while debugging) ──────────────────────
+// Hardcoded to anoin123 until API connectivity is confirmed on-device.
 
-async function fetchWhaleTrades() {
-  const url = `${DATA_API_BASE}/trades?filterType=CASH&filterAmount=${WHALE_MIN_USDC}&limit=100`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Trades fetch failed: HTTP ${res.status}`);
-  const data = await res.json();
-  return Array.isArray(data) ? data : data.data ?? data.trades ?? [];
-}
+const ANOIN123_ADDR = '0x8a791620dd6260079bf849dc5567adc3f2fdc318';
 
-// ── Map trade → whale card ────────────────────────────────────────────────────
-
-function tradeToWhale(trade, index) {
-  const usdc       = extractUsdc(trade);
-  const question   = trade.title ?? '';
-  const category   = detectCategory(question);
-  const addr       = trade.proxyWallet ?? '';
-  const name       = (trade.pseudonym ?? trade.name ?? shortenAddress(addr)) || `Whale #${index + 1}`;
-  const rawOutcome = trade.outcome ?? (trade.outcomeIndex === 0 ? 'Yes' : 'No');
-  const direction  = /^(yes|up)/i.test(rawOutcome) ? 'YES' : 'NO';
-  const bet        = formatBet(rawOutcome, category);
-  const eventDate  = extractDateFromTitle(question);
-  const score      = computeWhaleScore(usdc);
-
-  let type = 'dormant', stat = 'Whale bet';
-  if      (usdc >= 500_000) { type = 'consensus'; stat = 'Mega move'; }
-  else if (usdc >= 100_000) { type = 'active';    stat = 'Large position'; }
-  else if (usdc >= 50_000)  { type = 'ghost';     stat = 'Big bet'; }
-
-  return {
-    id:        trade.transactionHash ?? `trade-${index}`,
-    name,
-    type,
-    score,
-    badge:     CATEGORY_BADGE[category] ?? '📊 Other',
-    market:    question.slice(0, 60) || 'Unknown market',
-    amount:    formatUsdc(usdc),
-    direction,
-    bet,
-    eventDate,
-    time:      timeAgo(trade.timestamp),
-    stat,
-    raw:       { addr, usdc, question, category, direction },
-  };
-}
+const STATIC_WHALES = [
+  {
+    id:        'anoin123',
+    name:      'anoin123',
+    type:      'consensus',
+    score:     92,
+    badge:     '🏛 Politics',
+    market:    'Will the Iranian regime fall by June 30?',
+    amount:    '$524K',
+    direction: 'NO',
+    bet:       'No',
+    eventDate: 'Jun 30',
+    time:      'recently',
+    stat:      'Mega move',
+    raw: {
+      addr:      ANOIN123_ADDR,
+      usdc:      524_518,
+      question:  'Will the Iranian regime fall by June 30?',
+      category:  'politics',
+      direction: 'NO',
+    },
+  },
+];
 
 // ── Module-level cache ────────────────────────────────────────────────────────
 
@@ -199,32 +182,9 @@ export async function fetchWhaleActivity(forceRefresh = false) {
   if (!forceRefresh && _whaleCache && (Date.now() - _whaleCacheTime) < CACHE_TTL_MS) {
     return _whaleCache;
   }
-
-  const trades = await fetchWhaleTrades(); // throws on network/HTTP error
-
-  if (!trades.length) return [];
-
-  const filtered = trades.filter((t) => !isPastMarket(t.title ?? ''));
-
-  const byAddr = new Map();
-  for (const t of filtered) {
-    const addr = t.proxyWallet ?? t.transactionHash ?? `anon-${Math.random()}`;
-    const usdc = extractUsdc(t);
-    if (!byAddr.has(addr) || usdc > extractUsdc(byAddr.get(addr))) {
-      byAddr.set(addr, t);
-    }
-  }
-
-  if (!byAddr.size) return [];
-
-  const result = [...byAddr.values()]
-    .sort((a, b) => extractUsdc(b) - extractUsdc(a))
-    .slice(0, 8)
-    .map(tradeToWhale);
-
-  _whaleCache     = result;
+  _whaleCache     = STATIC_WHALES;
   _whaleCacheTime = Date.now();
-  return result;
+  return STATIC_WHALES;
 }
 
 // ── Positions processing ──────────────────────────────────────────────────────
