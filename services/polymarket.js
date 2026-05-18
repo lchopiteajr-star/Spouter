@@ -55,44 +55,65 @@ function timeAgo(unixSecs) {
 
 // ── Probe positions endpoints ─────────────────────────────────────────────────
 
-async function fetchPositions() {
-  const endpoints = [
-    // /positions without sort params (400 was likely caused by invalid sortBy value)
-    `${DATA_API_BASE}/positions?limit=100`,
-    // alternate sort param styles
-    `${DATA_API_BASE}/positions?limit=100&sort=currentValue&order=desc`,
-    `${DATA_API_BASE}/positions?limit=100&orderBy=currentValue&orderDirection=desc`,
-    // other likely endpoints
-    `${DATA_API_BASE}/leaderboard?limit=100`,
-    `${DATA_API_BASE}/activity?limit=100`,
-    `${DATA_API_BASE}/large-trades?limit=100`,
-  ];
+const GAMMA_BASE = 'https://gamma-api.polymarket.com';
 
-  const logItem = (label, item) => {
-    console.log(`[Spouter] ${label} keys+values:`);
-    for (const [k, v] of Object.entries(item)) {
-      console.log(`  ${k}: ${JSON.stringify(v)}`);
-    }
-  };
+const LEADERBOARD_ENDPOINTS = [
+  `${DATA_API_BASE}/leaderboard/profit?limit=100`,
+  `${DATA_API_BASE}/leaderboard/volume?limit=100`,
+  `${GAMMA_BASE}/leaderboard?limit=100`,
+  `${GAMMA_BASE}/users?limit=100&sortBy=volume&sortDirection=desc`,
+];
 
-  for (const url of endpoints) {
-    console.log('[Spouter] Trying:', url);
+async function probeLeaderboards() {
+  const results = await Promise.allSettled(
+    LEADERBOARD_ENDPOINTS.map((url) =>
+      fetch(url).then(async (res) => {
+        const text = await res.text();
+        console.log(`[Spouter] ${url}`);
+        console.log(`[Spouter]   → HTTP ${res.status} | first 500: ${text.slice(0, 500)}`);
+        return { url, status: res.status, text };
+      }).catch((e) => {
+        console.log(`[Spouter] ${url} → ERROR: ${e.message}`);
+        return { url, status: 0, text: '' };
+      })
+    )
+  );
+  // Return the first 200 response that has data
+  for (const r of results) {
+    if (r.status !== 'fulfilled') continue;
+    const { status, text, url } = r.value;
+    if (status !== 200 || !text || text === '[]' || text === 'null') continue;
     try {
-      const res = await fetch(url);
-      console.log(`[Spouter] → HTTP ${res.status}`);
-      if (!res.ok) continue;
-      const data = await res.json();
-      const items = Array.isArray(data) ? data : data.data ?? data.positions ?? data.holdings ?? [];
-      console.log(`[Spouter] → count: ${items.length}`);
-      if (items[0]) logItem(`first item from ${url}`, items[0]);
-      if (items.length) return items;
-    } catch (e) {
-      console.log(`[Spouter] → ERROR: ${e.message}`);
-    }
+      const data = JSON.parse(text);
+      const items = Array.isArray(data) ? data : data.data ?? data.users ?? data.leaderboard ?? [];
+      if (!items.length) continue;
+      console.log(`[Spouter] Winner: ${url} (${items.length} items)`);
+      console.log('[Spouter] First item keys+values:');
+      for (const [k, v] of Object.entries(items[0])) {
+        console.log(`  ${k}: ${JSON.stringify(v)}`);
+      }
+      return items;
+    } catch { continue; }
   }
-
-  console.log('[Spouter] All position endpoints failed');
   return [];
+}
+
+async function fetchWalletPositions(walletAddr) {
+  const url = `${DATA_API_BASE}/positions?user=${walletAddr}&limit=20&sortBy=currentValue&sortDirection=desc`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : data.data ?? data.positions ?? [];
+  } catch {
+    return [];
+  }
+}
+
+// Extract wallet address from a leaderboard entry — try every likely field
+function extractWallet(entry) {
+  return entry.proxyWallet ?? entry.address ?? entry.userAddress ??
+    entry.wallet ?? entry.user ?? entry.pseudonym ?? null;
 }
 
 // ── Map trade → whale card ────────────────────────────────────────────────────
@@ -189,36 +210,75 @@ function positionToWhale(pos, index) {
 }
 
 export async function fetchWhaleActivity() {
-  console.log('[Spouter] fetchWhaleActivity START — open positions');
+  console.log('[Spouter] fetchWhaleActivity START — leaderboard → positions');
   try {
-    const positions = await fetchPositions();
-
-    if (!positions.length) {
-      console.log('[Spouter] No positions returned, going mock');
+    // Step 1: get top wallets from leaderboard
+    const leaderboard = await probeLeaderboards();
+    if (!leaderboard.length) {
+      console.log('[Spouter] No leaderboard data, going mock');
       return MOCK_WHALES;
     }
 
+    // Step 2: extract wallet addresses and fetch their open positions
+    const wallets = leaderboard
+      .map(extractWallet)
+      .filter(Boolean)
+      .filter((w) => w.startsWith('0x')) // only real addresses, not pseudonyms
+      .slice(0, 20); // top 20 wallets
+    console.log(`[Spouter] Fetching positions for ${wallets.length} wallets`);
+
+    const positionBatches = await Promise.allSettled(
+      wallets.map(fetchWalletPositions)
+    );
+
+    const successCount = positionBatches.filter(
+      (r) => r.status === 'fulfilled' && r.value.length > 0
+    ).length;
+    console.log(`[Spouter] Wallets with positions: ${successCount}/${wallets.length}`);
+
+    // Log first successful position result to confirm field names
+    const firstSuccess = positionBatches.find(
+      (r) => r.status === 'fulfilled' && r.value.length > 0
+    );
+    if (firstSuccess?.value?.[0]) {
+      console.log('[Spouter] First position keys+values:');
+      for (const [k, v] of Object.entries(firstSuccess.value[0])) {
+        console.log(`  ${k}: ${JSON.stringify(v)}`);
+      }
+    }
+
+    // Flatten: one entry per wallet — their largest position
+    const allPositions = positionBatches.flatMap((r, i) => {
+      if (r.status !== 'fulfilled' || !r.value.length) return [];
+      // Keep only the biggest position per wallet and attach the wallet addr
+      const sorted = [...r.value].sort((a, b) =>
+        parseFloat(b.currentValue ?? b.value ?? b.size ?? b.amount ?? 0) -
+        parseFloat(a.currentValue ?? a.value ?? a.size ?? a.amount ?? 0)
+      );
+      return [{ ...sorted[0], _wallet: wallets[i] }];
+    });
+
+    console.log('[Spouter] Positions collected:', allPositions.length);
+
+    const topVals = allPositions
+      .slice(0, 8)
+      .map((p) => `$${Math.round(parseFloat(p.currentValue ?? p.value ?? p.size ?? p.amount ?? 0))}`);
+    console.log('[Spouter] Top values:', topVals.join(', '));
+
     // Filter out micro markets
-    const real = positions.filter((p) => !MICRO_MARKET.test(p.title ?? p.question ?? p.marketTitle ?? ''));
-    console.log(`[Spouter] After micro-market filter: ${real.length}/${positions.length}`);
-    const source = real.length ? real : positions;
+    const real = allPositions.filter(
+      (p) => !MICRO_MARKET.test(p.title ?? p.question ?? p.marketTitle ?? '')
+    );
+    const source = real.length ? real : allPositions;
 
-    // Log value distribution
-    const topVals = source.slice(0, 8).map((p) => {
-      const v = parseFloat(p.currentValue ?? p.value ?? p.size ?? p.amount ?? 0);
-      return `$${Math.round(v)}`;
-    });
-    console.log('[Spouter] Top 8 values:', topVals.join(', '));
+    const result = source
+      .sort((a, b) =>
+        parseFloat(b.currentValue ?? b.value ?? b.size ?? b.amount ?? 0) -
+        parseFloat(a.currentValue ?? a.value ?? a.size ?? a.amount ?? 0)
+      )
+      .slice(0, 8)
+      .map(positionToWhale);
 
-    // Filter by threshold; fall back to all if none qualify
-    const whales = source.filter((p) => {
-      const v = parseFloat(p.currentValue ?? p.value ?? p.size ?? p.amount ?? 0);
-      return v >= WHALE_THRESHOLD_USDC;
-    });
-    console.log(`[Spouter] Above $${WHALE_THRESHOLD_USDC}: ${whales.length}/${source.length}`);
-    const final = whales.length ? whales : source;
-
-    const result = final.slice(0, 8).map(positionToWhale);
     console.log('[Spouter] Returning', result.length, 'whale cards');
     return result;
 
