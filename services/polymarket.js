@@ -4,7 +4,6 @@
 //   proxyWallet, pseudonym, name, side, size (shares), price ($/share),
 //   timestamp (unix secs), title, outcome, outcomeIndex, transactionHash, conditionId
 const DATA_API_BASE = 'https://data-api.polymarket.com';
-const GAMMA_API_BASE = 'https://gamma-api.polymarket.com';
 
 const WHALE_MIN_USDC = 10_000;
 
@@ -63,19 +62,13 @@ function formatBet(outcome, category) {
   return outcome;
 }
 
-function formatEventDate(isoString) {
-  if (!isoString) return null;
-  try {
-    const d = new Date(isoString);
-    if (isNaN(d.getTime())) return null;
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  } catch (_) { return null; }
-}
-
 function extractDateFromTitle(title = '') {
-  // ISO date embedded in title
-  const iso = title.match(/\b(\d{4}-\d{2}-\d{2})\b/);
-  if (iso) return formatEventDate(iso[1]);
+  // ISO date embedded in title: 2026-05-17 → "May 17"
+  const iso = title.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+  if (iso) {
+    const d = new Date(parseInt(iso[1]), parseInt(iso[2]) - 1, parseInt(iso[3]));
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
 
   // "May 17" or "May 17, 2026" — return formatted directly
   const mdy = title.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:,?\s*\d{4})?/i);
@@ -112,43 +105,9 @@ function timeAgo(unixSecs) {
   return `${Math.round(mins / 60)} hr ago`;
 }
 
-// ── Gamma API: batch fetch active markets ────────────────────────────────────
-// Returns Map<conditionId, { endDate, ... }> — only includes active+open markets.
-// If the Gamma call fails entirely, returns null so callers can skip filtering.
-
-async function fetchGammaMarkets(conditionIds) {
-  if (!conditionIds.length) return new Map();
-
-  // Gamma supports comma-separated conditionIds in one request
-  const CHUNK = 20;
-  const marketMap = new Map();
-
-  for (let i = 0; i < conditionIds.length; i += CHUNK) {
-    const ids = conditionIds.slice(i, i + CHUNK).join(',');
-    const url = `${GAMMA_API_BASE}/markets?conditionIds=${ids}&active=true&closed=false`;
-    try {
-      const res = await fetch(url);
-      if (!res.ok) {
-        console.log('[Spouter] Gamma HTTP', res.status, '— skipping chunk');
-        continue;
-      }
-      const data = await res.json();
-      const list = Array.isArray(data) ? data : data.data ?? data.markets ?? [];
-      for (const m of list) {
-        const cid = m.conditionId ?? m.condition_id;
-        if (cid) marketMap.set(cid, m);
-      }
-    } catch (err) {
-      console.log('[Spouter] Gamma chunk error:', err.message);
-    }
-  }
-
-  return marketMap;
-}
-
 // ── Map trade → whale card ────────────────────────────────────────────────────
 
-function tradeToWhale(trade, index, gammaMarket = null) {
+function tradeToWhale(trade, index) {
   const usdc = extractUsdc(trade);
   const question = trade.title ?? '';
   const category = detectCategory(question);
@@ -161,8 +120,7 @@ function tradeToWhale(trade, index, gammaMarket = null) {
   const direction = /^(yes|up)/i.test(rawOutcome) ? 'YES' : 'NO';
   const bet = formatBet(rawOutcome, category);
 
-  // Event date: prefer Gamma endDate, fall back to parsing the title
-  const eventDate = formatEventDate(gammaMarket?.endDate ?? gammaMarket?.end_date) ?? extractDateFromTitle(question);
+  const eventDate = extractDateFromTitle(question);
 
   let type = 'dormant';
   let stat = 'Whale bet';
@@ -228,31 +186,10 @@ export async function fetchWhaleActivity() {
     }
     console.log('[Spouter] Unique wallets:', byAddr.size);
 
-    // Take top 20 candidates before the Gamma network call (more than 8 since some may be filtered)
-    const candidates = [...byAddr.values()]
+    const result = [...byAddr.values()]
       .sort((a, b) => extractUsdc(b) - extractUsdc(a))
-      .slice(0, 20);
-
-    // Batch-check Gamma: keep only active+open markets, grab endDate
-    const conditionIds = [...new Set(candidates.map((t) => t.conditionId).filter(Boolean))];
-    console.log('[Spouter] Gamma check for', conditionIds.length, 'conditionIds');
-    const gammaMap = await fetchGammaMarkets(conditionIds);
-    console.log('[Spouter] Active markets from Gamma:', gammaMap.size);
-
-    // If Gamma returned results, filter to active-only; otherwise keep all (graceful degradation)
-    const live = gammaMap.size > 0
-      ? candidates.filter((t) => t.conditionId && gammaMap.has(t.conditionId))
-      : candidates;
-    console.log('[Spouter] Candidates after Gamma filter:', live.length);
-
-    if (!live.length) {
-      console.log('[Spouter] No live candidates, going mock');
-      return MOCK_WHALES;
-    }
-
-    const result = live
       .slice(0, 8)
-      .map((t, i) => tradeToWhale(t, i, gammaMap.get(t.conditionId) ?? null));
+      .map(tradeToWhale);
 
     console.log('[Spouter] Returning', result.length, 'live whale cards');
     return result;
