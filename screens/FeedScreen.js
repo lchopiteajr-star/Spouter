@@ -97,9 +97,13 @@ export default function FeedScreen({ navigation }) {
                 </View>
                 <View style={styles.cardMid}>
                   <Text style={styles.amount}>{whale.amount}</Text>
-                  <Text style={styles.market}> · {whale.market} · </Text>
+                  <Text style={styles.market} numberOfLines={1}> · {whale.market}</Text>
+                </View>
+                <View style={styles.cardBet}>
                   <View style={[styles.direction, { backgroundColor: whale.direction === 'YES' ? '#0a2a1a' : '#2a0a0a' }]}>
-                    <Text style={[styles.directionText, { color: whale.direction === 'YES' ? '#00c896' : '#ff5555' }]}>{whale.direction}</Text>
+                    <Text style={[styles.directionText, { color: whale.direction === 'YES' ? '#00c896' : '#ff5555' }]}>
+                      Bet: {whale.bet ?? whale.direction}
+                    </Text>
                   </View>
                 </View>
                 <View style={styles.cardBottom}>
@@ -136,10 +140,11 @@ const styles = StyleSheet.create({
   whaleName: { fontSize: 13, fontWeight: '700', color: '#fff' },
   badge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
   badgeText: { fontSize: 10, fontWeight: '600' },
-  cardMid: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
+  cardMid: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
+  cardBet: { flexDirection: 'row', marginBottom: 6 },
   amount: { fontSize: 13, fontWeight: '700', color: '#fff' },
   market: { fontSize: 12, color: '#888', flex: 1 },
-  direction: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  direction: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4 },
   directionText: { fontSize: 10, fontWeight: '700' },
   cardBottom: { flexDirection: 'row', justifyContent: 'space-between' },
   time: { fontSize: 10, color: '#444' },

@@ -10,10 +10,14 @@ const WHALE_MIN_USDC = 10_000;
 // ── Category detection ────────────────────────────────────────────────────────
 
 const CATEGORY_RULES = [
-  { category: 'sports',        re: /soccer|football|nfl|nba|nhl|mlb|champions|premier league|world cup|copa|bundesliga|la liga|f1|formula 1|tennis|golf|rugby|cricket|nascar|olympics|super bowl|playoff|championship|tournament|ufc|boxing|mma|fight|canelo|fury/i },
-  { category: 'crypto',        re: /bitcoin|btc|eth|ethereum|crypto|token|blockchain|coin|defi|solana|sol|doge|xrp|bnb/i },
-  { category: 'politics',      re: /election|president|trump|congress|senate|vote|government|biden|harris|democrat|republican|tariff|policy|legislation|ballot|minister|parliament/i },
-  { category: 'entertainment', re: /oscar|emmy|grammy|netflix|movie|film|show|tv|television|celebrity|music|album|taylor|kanye|hollywood|box office|streaming|award|actor|actress/i },
+  // Crypto first — "Up or Down" price markets should be crypto, not sports
+  { category: 'crypto', re: /bitcoin|btc|eth|ethereum|crypto|token|coin|blockchain|defi|solana|sol|doge|xrp|bnb|altcoin|nft|web3|price|up or down|updown/i },
+  // Politics
+  { category: 'politics', re: /trump|biden|harris|election|president|congress|senate|vote|voting|democrat|republican|gop|maga|government|tariff|policy|legislation|ballot|prime minister|parliament|white house|supreme court|fed rate|federal reserve/i },
+  // Entertainment
+  { category: 'entertainment', re: /oscar|emmy|grammy|golden globe|netflix|hulu|disney|movie|film|box office|album|song|music|taylor swift|kanye|beyonce|celebrity|hollywood|tv show|television|season|episode|streaming|award show|actor|actress|kardashian/i },
+  // Sports — broad: leagues, terms, and enough team/player signals to catch most markets
+  { category: 'sports', re: /nfl|nba|nhl|mlb|ufc|mma|f1|formula 1|premier league|champions league|world cup|super bowl|playoffs|championship|tournament|moneyline|spread|over under|\bwin\b|game 7|series|match|vs\.|cavalier|laker|celtics|warriors|heat|knicks|bulls|pistons|bucks|suns|nuggets|pacers|thunder|nets|spurs|maverick|hawk|magic|wolf|grizzl|rocket|jazz|clipper|pelican|hornet|blazer|king|pistons|patriot|chief|eagle|cowboy|packers|49er|bear|lion|falcon|raider|bronco|dolphin|jet|giant|charger|steeler|browns|raven|texan|colts|titan|jaguar|bengal|viking|saint|buccaneer|panther|seahawk|ram|\bfc\b|\bsc\b|\bunited\b|city fc|arsenal|chelsea|liverpool|barcelona|madrid|psg|bayern|juventus|milan|tennis|golf|ufc|boxing|wrestling|nascar|moto|tour de france|wimbledon|grand slam|open|masters|pga|lpga|soccer|football|rugby|cricket|baseball|basketball|hockey|volleyball|swimming|athletics|marathon/i },
 ];
 
 function detectCategory(question = '') {
@@ -77,9 +81,12 @@ function tradeToWhale(trade, index) {
   const addr = trade.proxyWallet ?? '';
   const name = (trade.pseudonym ?? trade.name ?? shortenAddress(addr)) || `Whale #${index + 1}`;
 
-  // outcome is "Yes"/"No"/"Up"/"Down"; outcomeIndex 0=Yes 1=No as fallback
-  const outcome = trade.outcome ?? (trade.outcomeIndex === 0 ? 'Yes' : 'No');
-  const direction = /^(yes|up)/i.test(outcome) ? 'YES' : 'NO';
+  // outcome is the actual selection: "Cavaliers", "Yes", "No", "Up", "Down", etc.
+  const rawOutcome = trade.outcome ?? (trade.outcomeIndex === 0 ? 'Yes' : 'No');
+  // direction drives chip color; YES = green for Yes/Up/team picks, NO = red for No/Down
+  const direction = /^(yes|up)/i.test(rawOutcome) ? 'YES' : 'NO';
+  // bet is the human-readable label shown on the card
+  const bet = rawOutcome;
 
   let type = 'dormant';
   let stat = 'Whale bet';
@@ -101,6 +108,7 @@ function tradeToWhale(trade, index) {
     market: question.slice(0, 42) || 'Unknown market',
     amount: formatUsdc(usdc),
     direction,
+    bet,
     time: timeAgo(trade.timestamp),
     stat,
     raw: { addr, usdc, question, category, direction },
