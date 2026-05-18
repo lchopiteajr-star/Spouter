@@ -57,6 +57,24 @@ export default function WhaleProfileScreen({ route, navigation }) {
           )}
         </View>
 
+        {whale.market && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Latest trade</Text>
+            <View style={[styles.positionBox, { borderColor: accentColor + '33' }]}>
+              <Text style={styles.positionMarket}>{whale.market}</Text>
+              <View style={styles.positionRow}>
+                <View style={[styles.dirChip, { backgroundColor: whale.direction === 'YES' ? '#0a2a1a' : '#2a0a0a' }]}>
+                  <Text style={[styles.dirText, { color: whale.direction === 'YES' ? '#00c896' : '#ff5555' }]}>
+                    {whale.bet ?? whale.direction}
+                  </Text>
+                </View>
+                <Text style={[styles.positionAmount, { color: accentColor }]}>{whale.amount}</Text>
+                {whale.eventDate && <Text style={styles.positionDate}>{whale.eventDate}</Text>}
+              </View>
+            </View>
+          </View>
+        )}
+
         {loading ? (
           <View style={styles.loadingWrap}>
             <ActivityIndicator color={accentColor} />
@@ -66,50 +84,28 @@ export default function WhaleProfileScreen({ route, navigation }) {
           <View style={styles.errorWrap}>
             <Text style={styles.errorText}>Could not load profile</Text>
           </View>
-        ) : !profile ? (
-          <View style={styles.errorWrap}>
-            <Text style={styles.errorText}>No data found for this wallet</Text>
-          </View>
-        ) : (
+        ) : !profile ? null : (
           <>
             <View style={styles.statsGrid}>
               <View style={styles.statBox}>
-                <Text style={[styles.statVal, { color: accentColor }]}>{profile?.totalVolume ?? whale.amount ?? '—'}</Text>
+                <Text style={[styles.statVal, { color: accentColor }]}>{profile.totalVolume ?? whale.amount ?? '—'}</Text>
                 <Text style={styles.statLabel}>Total volume</Text>
               </View>
               <View style={styles.statBox}>
-                <Text style={[styles.statVal, { color: accentColor }]}>{profile?.biggestTrade ?? '—'}</Text>
+                <Text style={[styles.statVal, { color: accentColor }]}>{profile.biggestTrade ?? '—'}</Text>
                 <Text style={styles.statLabel}>Biggest trade</Text>
               </View>
               <View style={styles.statBox}>
-                <Text style={[styles.statVal, { color: accentColor, fontSize: 13 }]}>{profile?.topCategory ?? whale.badge ?? '—'}</Text>
+                <Text style={[styles.statVal, { color: accentColor, fontSize: 13 }]}>{profile.topCategory ?? whale.badge ?? '—'}</Text>
                 <Text style={styles.statLabel}>Top category</Text>
               </View>
               <View style={styles.statBox}>
-                <Text style={[styles.statVal, { color: accentColor }]}>{profile?.positions?.length ?? profile?.totalTrades ?? '—'}</Text>
+                <Text style={[styles.statVal, { color: accentColor }]}>{profile.positions?.length ?? profile.totalTrades ?? '—'}</Text>
                 <Text style={styles.statLabel}>Positions</Text>
               </View>
             </View>
 
-            {whale.market && (
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Latest trade</Text>
-                <View style={[styles.positionBox, { borderColor: accentColor + '33' }]}>
-                  <Text style={styles.positionMarket}>{whale.market}</Text>
-                  <View style={styles.positionRow}>
-                    <View style={[styles.dirChip, { backgroundColor: whale.direction === 'YES' ? '#0a2a1a' : '#2a0a0a' }]}>
-                      <Text style={[styles.dirText, { color: whale.direction === 'YES' ? '#00c896' : '#ff5555' }]}>
-                        {whale.bet ?? whale.direction}
-                      </Text>
-                    </View>
-                    <Text style={[styles.positionAmount, { color: accentColor }]}>{whale.amount}</Text>
-                    {whale.eventDate && <Text style={styles.positionDate}>{whale.eventDate}</Text>}
-                  </View>
-                </View>
-              </View>
-            )}
-
-            {profile?.positions?.length > 0 && (
+            {profile.positions?.length > 0 && (
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>Positions ({profile.positions.length})</Text>
                 <View style={styles.historyBox}>
@@ -133,14 +129,12 @@ export default function WhaleProfileScreen({ route, navigation }) {
                           {s === 'EVEN' && <Text style={styles.statusEven}>EVEN</Text>}
                           {s === 'OPEN' && <Text style={styles.statusOpen}>OPEN</Text>}
 
-                          {/* Dollar amount — always shown except EVEN/null with zero */}
                           {s === 'OPEN' ? (
                             p.curPrice ? <Text style={styles.posCurrentVal}>{p.curPrice}</Text> : null
                           ) : p.cashPnlRaw !== 0 ? (
                             <Text style={[styles.posPnl, { color: pnlColor }]}>{p.cashPnl}</Text>
                           ) : null}
 
-                          {/* Percentage — only for non-terminal states */}
                           {(s === null || s === undefined) && (
                             <Text style={[styles.posPct, { color: pnlColor }]}>{p.pctDisplay}</Text>
                           )}

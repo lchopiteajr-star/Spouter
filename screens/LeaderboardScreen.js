@@ -40,7 +40,7 @@ export default function LeaderboardScreen({ navigation }) {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Whale board</Text>
-        {!loading && <Text style={styles.subtitle}>{ranked.length} whales · by unrealized PnL</Text>}
+        {!loading && <Text style={styles.subtitle}>{ranked.length} whales · by total PnL</Text>}
       </View>
 
       {loading ? (
@@ -89,7 +89,7 @@ export default function LeaderboardScreen({ navigation }) {
                   {pnlStr ? (
                     <>
                       <Text style={[styles.pnl, { color: pnlPos ? '#00c896' : '#ff5555' }]}>{pnlStr}</Text>
-                      <Text style={styles.pnlLabel}>unrealized PnL</Text>
+                      <Text style={styles.pnlLabel}>total PnL</Text>
                     </>
                   ) : (
                     <>

@@ -124,7 +124,7 @@ export default function FeedScreen({ navigation }) {
                   </View>
                 </View>
                 <View style={styles.cardBottom}>
-                  <Text style={styles.time}>{whale.eventDate ?? whale.time}</Text>
+                  <Text style={styles.time}>{whale.eventDate ? `${whale.eventDate} · ${whale.time}` : whale.time}</Text>
                   <Text style={[styles.stat, { color: cardColor }]}>{whale.stat}</Text>
                 </View>
               </TouchableOpacity>

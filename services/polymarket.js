@@ -140,7 +140,7 @@ function tradeToWhale(trade, index) {
     name,
     type,
     badge: CATEGORY_BADGE[category] ?? '📊 Other',
-    market: question.slice(0, 42) || 'Unknown market',
+    market: question.slice(0, 60) || 'Unknown market',
     amount: formatUsdc(usdc),
     direction,
     bet,
@@ -215,7 +215,7 @@ function processPositions(positions) {
     const pctDisplay = `${percentPnl >= 0 ? '+' : ''}${(Math.abs(percentPnl) <= 1 ? percentPnl * 100 : percentPnl).toFixed(1)}%`;
 
     return {
-      title:        (p.title ?? p.market?.title ?? 'Unknown market').slice(0, 42),
+      title:        (p.title ?? p.market?.title ?? 'Unknown market').slice(0, 60),
       outcome:      p.outcome ?? p.outcomeTitle ?? '—',
       initialValue: initialValue > 0 ? formatUsdc(initialValue) : null,
       curPrice:     curPrice > 0     ? formatUsdc(curPrice)     : null,
