@@ -41,15 +41,18 @@ function CountStat({ value, label, color, format = 'number' }) {
 }
 
 // ── Progress bar for open positions ──────────────────────────────────────────
+// Shows current total position value vs initial investment.
+// currentValueRaw is the full dollar value of current holdings (not per-share price).
 
-function ProgressBar({ initialValueRaw, curPriceRaw }) {
-  if (!initialValueRaw || !curPriceRaw) return null;
-  const pct      = Math.min(1, curPriceRaw / initialValueRaw);
-  const winning  = curPriceRaw >= initialValueRaw;
+function ProgressBar({ initialValueRaw, currentValueRaw }) {
+  if (!initialValueRaw || currentValueRaw == null) return null;
+  const ratio   = currentValueRaw / initialValueRaw;
+  const pct     = Math.min(100, Math.round(ratio * 100));
+  const winning = ratio >= 1;
   return (
     <View style={styles.progressTrack}>
       <View style={[styles.progressFill, {
-        width: `${Math.round(pct * 100)}%`,
+        width: `${pct}%`,
         backgroundColor: winning ? '#00c896' : '#ff5555',
       }]} />
     </View>
@@ -197,11 +200,23 @@ export default function WhaleProfileScreen({ route, navigation }) {
             {/* Positions */}
             {profile.positions?.length > 0 && (
               <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Positions ({profile.positions.length})</Text>
+                {/* Section header with win/loss record */}
+                <View style={styles.positionsHeader}>
+                  <Text style={styles.sectionTitle}>
+                    Positions ({profile.positions.length})
+                  </Text>
+                  <Text style={styles.wlRecord}>
+                    <Text style={styles.wlWin}>{profile.wins ?? 0}W</Text>
+                    {' · '}
+                    <Text style={styles.wlLoss}>{profile.losses ?? 0}L</Text>
+                    {profile.opens > 0 ? ` · ${profile.opens}O` : ''}
+                  </Text>
+                </View>
                 <View style={styles.historyBox}>
                   {profile.positions.map((p, i) => {
                     const isLast   = i === profile.positions.length - 1;
                     const s        = p.status;
+                    // Dollar P&L color: green if positive, red if negative, grey if zero
                     const pnlColor = p.cashPnlRaw > 0 ? '#00c896' : p.cashPnlRaw < 0 ? '#ff5555' : '#555';
 
                     return (
@@ -212,26 +227,28 @@ export default function WhaleProfileScreen({ route, navigation }) {
                             <Text style={styles.posOutcome}>{p.outcome}</Text>
                             {p.initialValue && <Text style={styles.posInitial}> · {p.initialValue} in</Text>}
                           </View>
+                          {/* Progress bar: current total value vs initial investment */}
                           {s === 'OPEN' && (
                             <ProgressBar
                               initialValueRaw={p.initialValueRaw}
-                              curPriceRaw={p.curPriceRaw}
+                              currentValueRaw={p.currentValueRaw}
                             />
                           )}
                         </View>
                         <View style={styles.posRight}>
+                          {/* Status chip */}
                           {s === 'WON'  && <Text style={styles.statusWon}>WON</Text>}
                           {s === 'LOST' && <Text style={styles.statusLost}>LOST</Text>}
                           {s === 'EVEN' && <Text style={styles.statusEven}>EVEN</Text>}
                           {s === 'OPEN' && <Text style={styles.statusOpen}>OPEN</Text>}
 
-                          {s === 'OPEN' ? (
-                            p.curPrice ? <Text style={styles.posCurrentVal}>{p.curPrice}</Text> : null
-                          ) : p.cashPnlRaw !== 0 ? (
+                          {/* Dollar P&L — always show for resolved positions, show unrealized for OPEN */}
+                          {p.cashPnlRaw !== 0 && (
                             <Text style={[styles.posPnl, { color: pnlColor }]}>{p.cashPnl}</Text>
-                          ) : null}
+                          )}
 
-                          {(s === null || s === undefined) && (
+                          {/* Percentage — for open and ambiguous positions */}
+                          {(s === 'OPEN' || s === null) && (
                             <Text style={[styles.posPct, { color: pnlColor }]}>{p.pctDisplay}</Text>
                           )}
                         </View>
@@ -286,8 +303,12 @@ const styles = StyleSheet.create({
   statVal:      { fontSize: 18, fontWeight: '800' },
   statLabel:    { fontSize: 10, color: '#444', marginTop: 2 },
 
-  section:      { paddingHorizontal: 16, marginBottom: 16 },
-  sectionTitle: { fontSize: 11, color: '#444', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 },
+  section:         { paddingHorizontal: 16, marginBottom: 16 },
+  positionsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  sectionTitle:    { fontSize: 11, color: '#444', textTransform: 'uppercase', letterSpacing: 1 },
+  wlRecord:        { fontSize: 11, color: '#555' },
+  wlWin:           { color: '#00c896', fontWeight: '700' },
+  wlLoss:          { color: '#ff5555', fontWeight: '700' },
 
   positionBox:  { backgroundColor: '#131313', borderRadius: 12, padding: 12, borderWidth: 0.5 },
   positionMarket:{ fontSize: 13, color: '#ccc', marginBottom: 8 },
@@ -316,7 +337,6 @@ const styles = StyleSheet.create({
   statusLost:   { fontSize: 11, fontWeight: '800', color: '#ff5555' },
   statusEven:   { fontSize: 11, fontWeight: '700', color: '#fff' },
   statusOpen:   { fontSize: 11, fontWeight: '700', color: '#555' },
-  posCurrentVal:{ fontSize: 10, color: '#444', marginTop: 2 },
 
   loadingWrap:  { alignItems: 'center', justifyContent: 'center', paddingVertical: 40, gap: 10 },
   loadingText:  { fontSize: 12, color: '#444' },

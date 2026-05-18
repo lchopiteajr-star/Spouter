@@ -3,7 +3,7 @@ import {
   ActivityIndicator, Animated,
 } from 'react-native';
 import { useState, useEffect, useRef } from 'react';
-import { fetchWhaleActivity, getCachedWhales, fetchWhalePnl, scoreColor } from '../services/polymarket';
+import { fetchWhaleActivity, getCachedWhales, fetchWhalePnl, scoreColor, computeWhaleScore } from '../services/polymarket';
 
 const ACCENT    = { active: '#00c896', ghost: '#00aaff', dormant: '#a07fff', consensus: '#7fff9b' };
 const ACCENT_BG = { active: '#0a2a1a', ghost: '#0b1220', dormant: '#0c0a18', consensus: '#0a1408' };
@@ -92,7 +92,14 @@ export default function LeaderboardScreen({ navigation }) {
           whales.map((w) => fetchWhalePnl(w.raw?.addr ?? ''))
         );
 
-        const data = whales.map((w, i) => ({ ...w, pnl: pnlResults[i] }));
+        const data = whales.map((w, i) => ({
+          ...w,
+          pnl: pnlResults[i],
+          // Refine score now that we have real PnL data
+          score: pnlResults[i]
+            ? computeWhaleScore(w.raw?.usdc ?? 0, pnlResults[i].totalCashPnl)
+            : w.score,
+        }));
         setWithPnl(data);
       } catch {
         setError('Could not load leaderboard.');

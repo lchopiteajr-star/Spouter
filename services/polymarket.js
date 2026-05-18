@@ -232,26 +232,46 @@ export async function fetchWhaleActivity(forceRefresh = false) {
 function processPositions(positions) {
   const now = new Date();
   let totalCashPnl = 0;
+  let wins = 0, losses = 0, opens = 0;
 
   const list = positions.map((p) => {
-    const cashPnl        = parseFloat(p.cashPnl ?? 0);
-    const percentPnl     = parseFloat(p.percentPnl ?? 0);
-    const curPriceRaw    = parseFloat(p.curPrice ?? p.currentValue ?? 0);
-    const initialValueRaw = parseFloat(p.initialValue ?? p.cashInvested ?? 0);
-    const redeemable     = p.redeemable === true;
-    const endDate        = p.endDate ? new Date(p.endDate) : null;
-    const isPast         = endDate ? endDate <= now : false;
-    const isFuture       = endDate ? endDate > now  : false;
+    const cashPnl          = parseFloat(p.cashPnl ?? 0);
+    const percentPnl       = parseFloat(p.percentPnl ?? 0);
+    const size             = parseFloat(p.size ?? 0);
+    // curPrice is per-share price (e.g. 0.65); currentValue is total position value
+    const curPricePerShare = parseFloat(p.curPrice ?? 0);
+    const currentValueRaw  = parseFloat(p.currentValue ?? 0) || (curPricePerShare * size);
+    const initialValueRaw  = parseFloat(p.initialValue ?? p.cashInvested ?? 0);
+
+    const redeemable = p.redeemable === true;
+    const endDate    = p.endDate ? new Date(p.endDate) : null;
+    const isFuture   = endDate ? endDate > now : false;
 
     totalCashPnl += cashPnl;
 
+    // Status rules (in priority order):
+    //  1. redeemable=true → market resolved, you hold winning shares → WON
+    //     (cashPnl may be negative if you overpaid, but prediction was right)
+    //  2. Per-share price ~0 and market not still open → losing outcome → LOST
+    //  3. Current value near-zero vs initial, market not open → effectively lost
+    //  4. Market end date still in future → position is live → OPEN
+    //  5. Anything else → null (show data without status chip)
     let status;
-    if      (redeemable && cashPnl > 0)     status = 'WON';
-    else if (redeemable && cashPnl < 0)     status = 'LOST';
-    else if (redeemable && cashPnl === 0)   status = 'EVEN';
-    else if (curPriceRaw === 0 && isPast)   status = 'LOST';
-    else if (!redeemable && isFuture)       status = 'OPEN';
-    else                                     status = null;
+    if (redeemable) {
+      status = cashPnl === 0 ? 'EVEN' : 'WON';
+    } else if (curPricePerShare < 0.005 && !isFuture) {
+      status = 'LOST';
+    } else if (initialValueRaw > 0 && currentValueRaw < initialValueRaw * 0.05 && !isFuture) {
+      status = 'LOST';
+    } else if (isFuture) {
+      status = 'OPEN';
+    } else {
+      status = null;
+    }
+
+    if (status === 'WON' || status === 'EVEN') wins++;
+    else if (status === 'LOST')               losses++;
+    else if (status === 'OPEN')               opens++;
 
     // percentPnl: ratio (0.42) or already percentage (42.0)
     const pctDisplay = `${percentPnl >= 0 ? '+' : ''}${(Math.abs(percentPnl) <= 1 ? percentPnl * 100 : percentPnl).toFixed(1)}%`;
@@ -261,8 +281,8 @@ function processPositions(positions) {
       outcome:        p.outcome ?? p.outcomeTitle ?? '—',
       initialValue:   initialValueRaw > 0 ? formatUsdc(initialValueRaw) : null,
       initialValueRaw,
-      curPrice:       curPriceRaw > 0 ? formatUsdc(curPriceRaw) : null,
-      curPriceRaw,
+      currentValue:   currentValueRaw > 0 ? formatUsdc(currentValueRaw) : null,
+      currentValueRaw,
       cashPnl:        formatPnl(cashPnl),
       cashPnlRaw:     cashPnl,
       pctDisplay,
@@ -273,7 +293,7 @@ function processPositions(positions) {
   // Biggest positions first (by initial investment)
   list.sort((a, b) => (b.initialValueRaw ?? 0) - (a.initialValueRaw ?? 0));
 
-  return { list, totalCashPnl };
+  return { list, totalCashPnl, wins, losses, opens };
 }
 
 // ── Whale profile ─────────────────────────────────────────────────────────────
@@ -314,7 +334,7 @@ export async function fetchWhaleProfile(addr) {
   const topCategory = CATEGORY_BADGE[topCat] ?? '📊 Other';
   const memberSince = earliestTs < Infinity ? formatMonthYear(earliestTs) : null;
 
-  const { list: positionList, totalCashPnl } = processPositions(positions);
+  const { list: positionList, totalCashPnl, wins, losses, opens } = processPositions(positions);
 
   const score = computeWhaleScore(totalVolume, positionList.length ? totalCashPnl : null, trades.length);
 
@@ -327,6 +347,9 @@ export async function fetchWhaleProfile(addr) {
     totalTrades:     trades.length,
     memberSince,
     score,
+    wins,
+    losses,
+    opens,
     positions:       positionList,
     totalCashPnl:    positionList.length ? formatPnl(totalCashPnl) : null,
     totalCashPnlRaw: totalCashPnl,
