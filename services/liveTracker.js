@@ -129,6 +129,11 @@ export class LiveTracker {
     this._stopped = false;
     this._onStatus('connecting');
     this._connectWs();
+    // Populate feed immediately without waiting for WebSocket or poll timer
+    fetch(REST_URL)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => { if (Array.isArray(data)) data.forEach((raw) => this._processTrade(raw)); })
+      .catch(() => {});
   }
 
   stop() {

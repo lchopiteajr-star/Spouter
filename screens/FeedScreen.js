@@ -21,6 +21,33 @@ const FILTERS = [
   { label: '$1M+',   min: 1_000_000,   proOnly: false },
 ];
 
+// ─── Live indicator ───────────────────────────────────────────────────────────
+
+function LiveIndicator({ uniqueWhales }) {
+  const pulse = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 0.25, duration: 900, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 1, duration: 900, useNativeDriver: true }),
+      ])
+    ).start();
+  }, [pulse]);
+
+  return (
+    <View style={styles.liveIndicatorWrap}>
+      <View style={styles.liveRow}>
+        <Animated.View style={[styles.livePulseDot, { opacity: pulse }]} />
+        <Text style={styles.liveLabel}>LIVE</Text>
+      </View>
+      <Text style={styles.whaleSpotted}>
+        {'● '}{uniqueWhales} whale{uniqueWhales !== 1 ? 's' : ''} spotted
+      </Text>
+    </View>
+  );
+}
+
 // ─── Skeleton ────────────────────────────────────────────────────────────────
 
 function SkeletonCard({ opacity }) {
@@ -202,23 +229,17 @@ export default function FeedScreen({ navigation }) {
   const tierMin = isPro ? 50_000 : 100_000;
   const effectiveMin = activeFilter === 0 ? tierMin : activeFilter;
 
-  const midnight = useMemo(() => {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    return d.getTime() / 1000;
-  }, []);
-
   const filteredTrades = useMemo(
     () =>
       trades
         .filter((t) => t.usdc >= effectiveMin)
-        .sort((a, b) => b.usdc - a.usdc),
+        .sort((a, b) => b.timestamp - a.timestamp),
     [trades, effectiveMin]
   );
 
-  const todayCount = useMemo(
-    () => filteredTrades.filter((t) => t.timestamp >= midnight).length,
-    [filteredTrades, midnight]
+  const uniqueWhales = useMemo(
+    () => new Set(trades.map((t) => t.wallet).filter(Boolean)).size,
+    [trades]
   );
 
   const handleTrade = useCallback((trade) => {
@@ -266,7 +287,6 @@ export default function FeedScreen({ navigation }) {
     [navigation]
   );
 
-  const isLive = status === 'live';
   const isError = status === 'error';
 
   const renderItem = useCallback(
@@ -292,19 +312,10 @@ export default function FeedScreen({ navigation }) {
     <View style={styles.screen}>
       {/* Header */}
       <View style={styles.header}>
-        <View style={styles.headerTop}>
-          <Text style={styles.logo}>
-            spout<Text style={styles.logoAccent}>er</Text>
-          </Text>
-          <View style={[styles.statusPill, isLive ? styles.pillLive : styles.pillPolling]}>
-            <View style={[styles.statusDot, isLive ? styles.dotLive : styles.dotPolling]} />
-            <Text style={styles.statusText}>{isLive ? 'LIVE' : status.toUpperCase()}</Text>
-          </View>
-        </View>
-        <Text style={styles.headerSub}>Live Polymarket whale tracker</Text>
-        <Text style={styles.todayCount}>
-          {todayCount} whale{todayCount !== 1 ? 's' : ''} spotted today
+        <Text style={styles.logo}>
+          spout<Text style={styles.logoAccent}>er</Text>
         </Text>
+        <LiveIndicator uniqueWhales={uniqueWhales} />
       </View>
 
       {/* Filter bar */}
@@ -346,11 +357,6 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#1a1a1a',
   },
-  headerTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
   logo: {
     fontSize: 26,
     fontWeight: '800',
@@ -359,46 +365,32 @@ const styles = StyleSheet.create({
   logoAccent: {
     color: '#ff69b4',
   },
-  statusPill: {
+  // Live indicator
+  liveIndicatorWrap: {
+    marginTop: 8,
+    gap: 3,
+  },
+  liveRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 20,
-    gap: 5,
+    gap: 6,
   },
-  pillLive: {
-    backgroundColor: '#0a2a1a',
-  },
-  pillPolling: {
-    backgroundColor: '#222',
-  },
-  statusDot: {
+  livePulseDot: {
     width: 7,
     height: 7,
     borderRadius: 4,
-  },
-  dotLive: {
     backgroundColor: '#00c896',
   },
-  dotPolling: {
-    backgroundColor: '#666',
-  },
-  statusText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#aaa',
-    letterSpacing: 0.5,
-  },
-  headerSub: {
-    fontSize: 13,
-    color: '#666',
-    marginTop: 4,
-  },
-  todayCount: {
+  liveLabel: {
     fontSize: 12,
+    fontWeight: '700',
     color: '#00c896',
-    marginTop: 2,
+    letterSpacing: 0.8,
+  },
+  whaleSpotted: {
+    fontSize: 12,
+    color: '#444',
+    marginTop: 1,
   },
   // Filter bar
   filterBar: {
