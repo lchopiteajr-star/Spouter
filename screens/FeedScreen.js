@@ -97,6 +97,7 @@ function FilterBar({ activeFilter, onSelect, isPro }) {
     <ScrollView
       horizontal
       showsHorizontalScrollIndicator={false}
+      style={styles.filterScrollView}
       contentContainerStyle={styles.filterBar}
     >
       {FILTERS.map((f) => {
@@ -393,10 +394,17 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
   // Filter bar
+  filterScrollView: {
+    flexGrow: 0,
+    flexShrink: 0,
+    borderBottomWidth: 1,
+    borderBottomColor: '#1a1a1a',
+  },
   filterBar: {
     paddingHorizontal: 12,
     paddingVertical: 10,
     gap: 8,
+    alignItems: 'center',
   },
   filterChip: {
     flexDirection: 'row',

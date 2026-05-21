@@ -24,9 +24,11 @@ function formatUsdc(size, price) {
   return `$${Math.round(usdc)}`;
 }
 
-function directionFromTrade(raw) {
-  const test = `${raw.outcome ?? ''} ${raw.side ?? ''}`.toLowerCase();
-  return /^(yes|up|buy)/.test(test) ? 'YES' : 'NO';
+function directionFromActivity(raw) {
+  const side = (raw.side ?? '').toUpperCase();
+  if (side === 'BUY') return 'YES';
+  if (side === 'SELL') return 'NO';
+  return /^yes/i.test(raw.outcome ?? '') ? 'YES' : 'NO';
 }
 
 export default function WhaleProfileScreen({ navigation, route }) {
@@ -46,7 +48,7 @@ export default function WhaleProfileScreen({ navigation, route }) {
     }
     setLoading(true);
     setError(false);
-    fetch(`https://data-api.polymarket.com/trades?user=${wallet}&limit=10`)
+    fetch(`https://data-api.polymarket.com/activity?user=${wallet}&limit=100`)
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
@@ -60,8 +62,6 @@ export default function WhaleProfileScreen({ navigation, route }) {
         setLoading(false);
       });
   }, [wallet]);
-
-  const direction = (raw) => directionFromTrade(raw);
 
   return (
     <View style={styles.screen}>
@@ -77,8 +77,10 @@ export default function WhaleProfileScreen({ navigation, route }) {
         {/* Wallet */}
         <Text style={styles.wallet}>{wallet || 'No wallet address'}</Text>
 
-        {/* Trades section */}
-        <Text style={styles.sectionTitle}>Last 10 Trades</Text>
+        {/* Trade history section */}
+        <Text style={styles.sectionTitle}>
+          Trade History{trades.length > 0 ? ` (${trades.length})` : ''}
+        </Text>
 
         {loading && (
           <ActivityIndicator color="#00c896" style={{ marginTop: 32 }} />
@@ -87,30 +89,32 @@ export default function WhaleProfileScreen({ navigation, route }) {
         {!loading && error && (
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyIcon}>⚠️</Text>
-            <Text style={styles.emptyText}>Failed to load trades.</Text>
+            <Text style={styles.emptyText}>Failed to load activity.</Text>
           </View>
         )}
 
         {!loading && !error && trades.length === 0 && (
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyIcon}>🐋</Text>
-            <Text style={styles.emptyText}>No trades found.</Text>
+            <Text style={styles.emptyText}>No activity found.</Text>
           </View>
         )}
 
         {!loading && !error && trades.map((raw, idx) => {
-          const dir = direction(raw);
+          const dir = directionFromActivity(raw);
           const isYes = dir === 'YES';
-          const title = (raw.title ?? '').length > 50
-            ? (raw.title ?? '').slice(0, 47) + '…'
-            : (raw.title ?? '');
+          const title = (raw.title ?? raw.market ?? '').length > 55
+            ? (raw.title ?? raw.market ?? '').slice(0, 52) + '…'
+            : (raw.title ?? raw.market ?? '');
           const amount = formatUsdc(raw.size, raw.price);
           const ago = timeAgo(Number(raw.timestamp ?? 0));
+          const outcome = raw.outcome ?? '';
 
           return (
             <View key={raw.transactionHash ?? raw.id ?? idx} style={styles.tradeRow}>
               <View style={styles.tradeInfo}>
                 <Text style={styles.tradeTitle} numberOfLines={2}>{title}</Text>
+                <Text style={styles.tradeOutcome} numberOfLines={1}>{outcome}</Text>
                 <Text style={styles.tradeMeta}>{amount} · {ago}</Text>
               </View>
               <View style={[styles.dirChip, isYes ? styles.chipYes : styles.chipNo]}>
@@ -184,8 +188,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#ddd',
     fontWeight: '600',
-    marginBottom: 4,
+    marginBottom: 3,
     lineHeight: 18,
+  },
+  tradeOutcome: {
+    fontSize: 11,
+    color: '#666',
+    marginBottom: 4,
   },
   tradeMeta: {
     fontSize: 12,
