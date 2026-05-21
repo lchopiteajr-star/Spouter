@@ -67,9 +67,16 @@ function timeAgo(timestamp) {
   const now = Date.now() / 1000;
   const diff = now - timestamp;
   if (diff < 60) return 'just now';
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
+  if (diff < 3600) {
+    const m = Math.floor(diff / 60);
+    return `${m} minute${m !== 1 ? 's' : ''} ago`;
+  }
+  if (diff < 86400) {
+    const h = Math.floor(diff / 3600);
+    return `${h} hour${h !== 1 ? 's' : ''} ago`;
+  }
+  const d = Math.floor(diff / 86400);
+  return `${d} day${d !== 1 ? 's' : ''} ago`;
 }
 
 function normaliseTrade(raw) {
@@ -81,9 +88,14 @@ function normaliseTrade(raw) {
   const id =
     raw.transactionHash ?? raw.id ?? `${raw.timestamp}${raw.proxyWallet}`;
   const outcome = raw.outcome ?? '';
-  const side = raw.side ?? '';
-  const directionTest = `${outcome} ${side}`.toLowerCase();
-  const direction = /^(yes|up|buy)/.test(directionTest) ? 'YES' : 'NO';
+  const side = (raw.side ?? '').toUpperCase();
+  // BUY = going long on this outcome (YES), SELL = exiting/shorting (NO).
+  // Fall back to outcome text only if side is missing (e.g. older REST records).
+  const direction = side === 'BUY'
+    ? 'YES'
+    : side === 'SELL'
+      ? 'NO'
+      : /^(yes|up)/i.test(outcome) ? 'YES' : 'NO';
 
   return {
     id,

@@ -112,6 +112,31 @@ function WhaleTrade({ item, onPress }) {
   );
 }
 
+// ─── Empty / Error state ─────────────────────────────────────────────────────
+// Defined outside FeedScreen so FlatList doesn't remount it on every render.
+
+function EmptyState({ loading, isError, onRetry }) {
+  if (loading) return <SkeletonList />;
+  if (isError) {
+    return (
+      <View style={styles.emptyContainer}>
+        <Text style={styles.emptyIcon}>📡</Text>
+        <Text style={styles.emptyText}>Lost connection.</Text>
+        <TouchableOpacity style={styles.retryBtn} onPress={onRetry}>
+          <Text style={styles.retryText}>Tap to retry</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+  return (
+    <View style={styles.emptyContainer}>
+      <Text style={styles.emptyIcon}>🐋</Text>
+      <Text style={styles.emptyText}>No $100K+ trades yet today.</Text>
+      <Text style={styles.emptySubtext}>Check back soon.</Text>
+    </View>
+  );
+}
+
 // ─── FeedScreen ───────────────────────────────────────────────────────────────
 
 export default function FeedScreen({ navigation }) {
@@ -183,33 +208,16 @@ export default function FeedScreen({ navigation }) {
     [handleCardPress]
   );
 
-  const ListEmpty = () => {
-    if (loading) return <SkeletonList />;
-    if (isError) {
-      return (
-        <View style={styles.emptyContainer}>
-          <Text style={styles.emptyIcon}>📡</Text>
-          <Text style={styles.emptyText}>Lost connection.</Text>
-          <TouchableOpacity
-            style={styles.retryBtn}
-            onPress={() => {
-              setLoading(true);
-              if (trackerRef.current) trackerRef.current.refresh();
-            }}
-          >
-            <Text style={styles.retryText}>Tap to retry</Text>
-          </TouchableOpacity>
-        </View>
-      );
-    }
-    return (
-      <View style={styles.emptyContainer}>
-        <Text style={styles.emptyIcon}>🐋</Text>
-        <Text style={styles.emptyText}>No $100K+ trades yet today.</Text>
-        <Text style={styles.emptySubtext}>Check back soon.</Text>
-      </View>
-    );
-  };
+  const listEmpty = useCallback(() => (
+    <EmptyState
+      loading={loading}
+      isError={isError}
+      onRetry={() => {
+        setLoading(true);
+        if (trackerRef.current) trackerRef.current.refresh();
+      }}
+    />
+  ), [loading, isError]);
 
   return (
     <View style={styles.screen}>
@@ -243,7 +251,7 @@ export default function FeedScreen({ navigation }) {
             tintColor="#00c896"
           />
         }
-        ListEmptyComponent={ListEmpty}
+        ListEmptyComponent={listEmpty}
         removeClippedSubviews
         maxToRenderPerBatch={10}
         windowSize={10}
