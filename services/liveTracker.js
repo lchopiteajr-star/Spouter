@@ -1,15 +1,11 @@
 const WS_URL = 'wss://ws-live-data.polymarket.com';
 const REST_URL =
   'https://data-api.polymarket.com/trades?filterType=CASH&filterAmount=100000&limit=50';
-const SUBSCRIBE_MSG = JSON.stringify({
-  action: 'subscribe',
-  subscriptions: [{ topic: 'activity', type: 'trades' }],
-});
-const WHALE_THRESHOLD = 100_000;
-const DEDUP_CAP = 500;
 const PING_INTERVAL = 10_000;
 const POLL_INTERVAL = 30_000;
 const RECONNECT_DELAY = 5_000;
+const MAX_SEEN = 500;
+const MIN_USDC = 100_000;
 
 export const CATEGORY_BADGE = {
   sports: '⚽ Sports',
@@ -29,18 +25,34 @@ export const CATEGORY_COLOR = {
 
 function detectCategory(title = '') {
   const t = title.toLowerCase();
-  if (/\b(nba|nfl|nhl|mlb|soccer|football|basketball|baseball|tennis|golf|sport|match|game|championship|league|playoff|world cup|super bowl|mvp|coach|team|player)\b/.test(t))
+  if (
+    /\b(nba|nfl|nhl|mlb|soccer|football|basketball|baseball|tennis|golf|ufc|mma|sport|team|match|game|championship|league|cup|tournament|player|score)\b/.test(
+      t
+    )
+  )
     return 'sports';
-  if (/\b(bitcoin|btc|eth|ethereum|crypto|token|defi|nft|blockchain|solana|coinbase|binance|altcoin)\b/.test(t))
+  if (
+    /\b(bitcoin|btc|eth|ethereum|crypto|token|defi|nft|blockchain|coin|solana|sol|bnb|doge|altcoin)\b/.test(
+      t
+    )
+  )
     return 'crypto';
-  if (/\b(president|election|senate|congress|vote|democrat|republican|trump|biden|harris|governor|policy|political|legislation|party|ballot)\b/.test(t))
+  if (
+    /\b(president|election|senate|congress|democrat|republican|poll|vote|biden|trump|government|policy|minister|political|party|law|bill|supreme court)\b/.test(
+      t
+    )
+  )
     return 'politics';
-  if (/\b(oscar|emmy|grammy|movie|film|actor|actress|celebrity|music|album|tv|show|award|box office|streaming|netflix|disney|hollywood)\b/.test(t))
+  if (
+    /\b(movie|film|music|celebrity|award|oscar|grammy|actor|actress|singer|show|series|tv|box office|album|chart|entertainment)\b/.test(
+      t
+    )
+  )
     return 'entertainment';
   return 'other';
 }
 
-function formatUSDC(usdc) {
+function formatUsdc(usdc) {
   if (usdc >= 1_000_000) return `$${(usdc / 1_000_000).toFixed(1)}M`;
   if (usdc >= 1_000) return `$${Math.round(usdc / 1_000)}K`;
   return `$${Math.round(usdc)}`;
@@ -51,20 +63,42 @@ function walletShort(addr = '') {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
-function timeAgo(ts) {
-  const diffSec = Math.floor(Date.now() / 1000) - ts;
-  if (diffSec < 60) return 'just now';
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr}h ago`;
-  return `${Math.floor(diffHr / 24)}d ago`;
+function timeAgo(timestamp) {
+  const now = Date.now() / 1000;
+  const diff = now - timestamp;
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
 }
 
-function detectDirection(outcome = '', side = '') {
-  return /^(yes|up|buy)/i.test(outcome) || /^(yes|up|buy)/i.test(side)
-    ? 'YES'
-    : 'NO';
+function normaliseTrade(raw) {
+  const size = Number(raw.size ?? 0);
+  const price = Number(raw.price ?? 0);
+  const usdc = size * price;
+  if (usdc < MIN_USDC) return null;
+
+  const id =
+    raw.transactionHash ?? raw.id ?? `${raw.timestamp}${raw.proxyWallet}`;
+  const outcome = raw.outcome ?? '';
+  const side = raw.side ?? '';
+  const directionTest = `${outcome} ${side}`.toLowerCase();
+  const direction = /^(yes|up|buy)/.test(directionTest) ? 'YES' : 'NO';
+
+  return {
+    id,
+    usdc,
+    usdcDisplay: formatUsdc(usdc),
+    pseudonym: raw.pseudonym ?? 'Unknown',
+    wallet: raw.proxyWallet ?? '',
+    walletShort: walletShort(raw.proxyWallet ?? ''),
+    title: raw.title ?? '',
+    outcome,
+    direction,
+    category: detectCategory(raw.title ?? ''),
+    timestamp: Number(raw.timestamp ?? 0),
+    timeAgo: timeAgo(Number(raw.timestamp ?? 0)),
+  };
 }
 
 export class LiveTracker {
@@ -82,7 +116,7 @@ export class LiveTracker {
   start() {
     this._stopped = false;
     this._onStatus('connecting');
-    this._connectWS();
+    this._connectWs();
   }
 
   stop() {
@@ -100,46 +134,30 @@ export class LiveTracker {
     this._poll();
   }
 
-  _clearTimers() {
-    if (this._pingTimer) {
-      clearInterval(this._pingTimer);
-      this._pingTimer = null;
-    }
-    if (this._pollTimer) {
-      clearInterval(this._pollTimer);
-      this._pollTimer = null;
-    }
-    if (this._reconnectTimer) {
-      clearTimeout(this._reconnectTimer);
-      this._reconnectTimer = null;
-    }
-  }
-
-  _connectWS() {
+  _connectWs() {
     if (this._stopped) return;
     try {
       const ws = new WebSocket(WS_URL);
       this._ws = ws;
 
       ws.onopen = () => {
-        if (this._stopped) return;
-        ws.send(SUBSCRIBE_MSG);
-        this._onStatus('live');
-        // Stop polling when WS is live
-        if (this._pollTimer) {
-          clearInterval(this._pollTimer);
-          this._pollTimer = null;
+        if (this._stopped) {
+          ws.close();
+          return;
         }
-        // Keep-alive ping every 10s
-        this._pingTimer = setInterval(() => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send('ping');
-          }
-        }, PING_INTERVAL);
+        ws.send(
+          JSON.stringify({
+            action: 'subscribe',
+            subscriptions: [{ topic: 'activity', type: 'trades' }],
+          })
+        );
+        this._onStatus('live');
+        this._clearPollTimer();
+        this._clearReconnectTimer();
+        this._startPing(ws);
       };
 
       ws.onmessage = (event) => {
-        if (this._stopped) return;
         try {
           const msg = JSON.parse(event.data);
           if (
@@ -147,31 +165,28 @@ export class LiveTracker {
             msg.type === 'trades' &&
             msg.payload
           ) {
-            const trade = this._normaliseTrade(msg.payload);
-            if (trade) this._onTrade(trade);
+            this._processTrade(msg.payload);
           }
         } catch (_) {}
       };
 
       ws.onclose = () => {
         if (this._stopped) return;
-        if (this._pingTimer) {
-          clearInterval(this._pingTimer);
-          this._pingTimer = null;
-        }
+        this._clearPingTimer();
         this._onStatus('polling');
         this._startPolling();
         this._reconnectTimer = setTimeout(() => {
-          this._connectWS();
+          this._connectWs();
         }, RECONNECT_DELAY);
       };
 
       ws.onerror = () => {
         if (this._stopped) return;
-        if (this._pingTimer) {
-          clearInterval(this._pingTimer);
-          this._pingTimer = null;
-        }
+        this._clearPingTimer();
+        try {
+          ws.close();
+        } catch (_) {}
+        this._ws = null;
         this._onStatus('polling');
         this._startPolling();
       };
@@ -183,12 +198,21 @@ export class LiveTracker {
     }
   }
 
+  _startPing(ws) {
+    this._clearPingTimer();
+    this._pingTimer = setInterval(() => {
+      if (ws.readyState === 1) {
+        try {
+          ws.send('ping');
+        } catch (_) {}
+      }
+    }, PING_INTERVAL);
+  }
+
   _startPolling() {
-    if (this._pollTimer) return;
     this._poll();
-    this._pollTimer = setInterval(() => {
-      this._poll();
-    }, POLL_INTERVAL);
+    this._clearPollTimer();
+    this._pollTimer = setInterval(() => this._poll(), POLL_INTERVAL);
   }
 
   async _poll() {
@@ -197,60 +221,50 @@ export class LiveTracker {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (Array.isArray(data)) {
-        for (const raw of data) {
-          const trade = this._normaliseTrade(raw);
-          if (trade) this._onTrade(trade);
-        }
+        data.forEach((raw) => this._processTrade(raw));
       }
     } catch (_) {
-      if (!this._stopped) {
-        this._onStatus('error');
-      }
+      this._onStatus('error');
     }
   }
 
-  _normaliseTrade(raw) {
-    const size = Number(raw.size ?? 0);
-    const price = Number(raw.price ?? 0);
-    const usdc = size * price;
-    if (usdc < WHALE_THRESHOLD) return null;
+  _processTrade(raw) {
+    const trade = normaliseTrade(raw);
+    if (!trade) return;
+    if (this._seen.has(trade.id)) return;
 
-    const dedupeKey =
-      raw.transactionHash ??
-      raw.id ??
-      `${raw.timestamp}:${raw.proxyWallet}`;
-
-    if (this._seen.has(dedupeKey)) return null;
-
-    // Cap the dedup set
-    if (this._seen.size >= DEDUP_CAP) {
+    if (this._seen.size >= MAX_SEEN) {
       const first = this._seen.values().next().value;
       this._seen.delete(first);
     }
-    this._seen.add(dedupeKey);
+    this._seen.add(trade.id);
+    this._onTrade(trade);
+  }
 
-    const title = raw.title ?? raw.market ?? '';
-    const outcome = raw.outcome ?? '';
-    const side = raw.side ?? '';
-    const pseudonym = raw.pseudonym ?? raw.name ?? 'Anonymous';
-    const wallet = raw.proxyWallet ?? raw.wallet ?? '';
-    const timestamp = Number(raw.timestamp ?? Math.floor(Date.now() / 1000));
-    const category = detectCategory(title);
-    const direction = detectDirection(outcome, side);
+  _clearTimers() {
+    this._clearPingTimer();
+    this._clearPollTimer();
+    this._clearReconnectTimer();
+  }
 
-    return {
-      id: dedupeKey,
-      usdc,
-      usdcDisplay: formatUSDC(usdc),
-      pseudonym,
-      wallet,
-      walletShort: walletShort(wallet),
-      title,
-      outcome,
-      direction,
-      category,
-      timestamp,
-      timeAgo: timeAgo(timestamp),
-    };
+  _clearPingTimer() {
+    if (this._pingTimer) {
+      clearInterval(this._pingTimer);
+      this._pingTimer = null;
+    }
+  }
+
+  _clearPollTimer() {
+    if (this._pollTimer) {
+      clearInterval(this._pollTimer);
+      this._pollTimer = null;
+    }
+  }
+
+  _clearReconnectTimer() {
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
   }
 }

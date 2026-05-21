@@ -1,268 +1,470 @@
 import {
-  StyleSheet, Text, View, ScrollView, TouchableOpacity,
-  ActivityIndicator, RefreshControl, Animated,
+  StyleSheet,
+  Text,
+  View,
+  FlatList,
+  TouchableOpacity,
+  Animated,
+  RefreshControl,
+  Share,
 } from 'react-native';
-import { useState, useEffect, useCallback, useRef } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { fetchWhaleActivity, getCacheAge, scoreColor } from '../services/polymarket';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { LiveTracker, CATEGORY_BADGE, CATEGORY_COLOR } from '../services/liveTracker';
 
-const FILTER_KEY = 'spouter_active_filter';
+// ─── Skeleton ────────────────────────────────────────────────────────────────
 
-const typeColors = {
-  active:    '#00c896',
-  ghost:     '#00aaff',
-  dormant:   '#a07fff',
-  consensus: '#7fff9b',
-};
-
-const typeBackground = {
-  active:    '#0b1612',
-  ghost:     '#0b1220',
-  dormant:   '#0c0a18',
-  consensus: '#0a1408',
-};
-
-const FILTERS = ['All', 'Sports', 'Crypto', 'Politics', 'Entertainment'];
-
-const categoryToFilter = {
-  sports:        'Sports',
-  crypto:        'Crypto',
-  politics:      'Politics',
-  entertainment: 'Entertainment',
-};
-
-// ── Animated feed card ────────────────────────────────────────────────────────
-
-function WhaleCard({ whale, index, onPress }) {
-  const fadeAnim  = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(12)).current;
-
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeAnim,  { toValue: 1, duration: 300, delay: index * 60, useNativeDriver: true }),
-      Animated.timing(slideAnim, { toValue: 0, duration: 300, delay: index * 60, useNativeDriver: true }),
-    ]).start();
-  }, []);
-
-  const cardColor = typeColors[whale.type]      ?? '#00c896';
-  const cardBg    = typeBackground[whale.type]  ?? '#0b1612';
-  const sc        = scoreColor(whale.score ?? 1);
-
+function SkeletonCard({ opacity }) {
   return (
-    <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
-      <TouchableOpacity
-        style={[styles.card, { backgroundColor: cardBg, borderColor: cardColor + '44' }]}
-        onPress={onPress}
-        activeOpacity={0.75}
-      >
-        {/* Row 1: score badge · name · wallet · category */}
-        <View style={styles.cardTop}>
-          <View style={[styles.scoreBadge, { backgroundColor: sc + '22', borderColor: sc + '55' }]}>
-            <Text style={[styles.scoreText, { color: sc }]}>{whale.score ?? '—'}</Text>
-          </View>
-          <Text style={styles.whaleName} numberOfLines={1}>{whale.name}</Text>
-          {whale.raw?.addr ? (
-            <Text style={styles.walletAddr}>
-              {`${whale.raw.addr.slice(0, 5)}…${whale.raw.addr.slice(-3)}`}
-            </Text>
-          ) : null}
-          <View style={[styles.badge, { backgroundColor: cardColor + '22' }]}>
-            <Text style={[styles.badgeText, { color: cardColor }]}>{whale.badge ?? '📊 Other'}</Text>
-          </View>
-        </View>
-
-        {/* Row 2: bet outcome · market title */}
-        <View style={styles.cardBetRow}>
-          <View style={[styles.direction, { backgroundColor: whale.direction === 'YES' ? '#0a2a1a' : '#2a0a0a' }]}>
-            <Text style={[styles.directionText, { color: whale.direction === 'YES' ? '#00c896' : '#ff5555' }]}>
-              {whale.direction === 'YES' ? '↑' : '↓'} {whale.bet ?? whale.direction}
-            </Text>
-          </View>
-          <Text style={styles.market} numberOfLines={1}>{whale.market}</Text>
-        </View>
-
-        {/* Row 3: amount large */}
-        <Text style={[styles.amount, { color: cardColor }]}>{whale.amount}</Text>
-
-        {/* Row 4: date+time · stat */}
-        <View style={styles.cardBottom}>
-          <Text style={styles.time}>
-            {whale.eventDate ? `${whale.eventDate} · ${whale.time}` : whale.time}
-          </Text>
-          <Text style={[styles.stat, { color: cardColor }]}>{whale.stat}</Text>
-        </View>
-      </TouchableOpacity>
+    <Animated.View style={[styles.card, { opacity }]}>
+      <View style={styles.skRow}>
+        <View style={[styles.skBox, { width: 80, height: 18 }]} />
+        <View style={[styles.skBox, { width: 50, height: 14 }]} />
+      </View>
+      <View style={[styles.skBox, { width: '100%', height: 16, marginTop: 10 }]} />
+      <View style={[styles.skBox, { width: '70%', height: 16, marginTop: 6 }]} />
+      <View style={styles.skRow2}>
+        <View style={[styles.skBox, { width: 60, height: 22 }]} />
+        <View style={[styles.skBox, { width: 120, height: 14 }]} />
+      </View>
+      <View style={[styles.skBox, { width: 100, height: 34, marginTop: 10 }]} />
+      <View style={[styles.skBox, { width: '60%', height: 14, marginTop: 10 }]} />
     </Animated.View>
   );
 }
 
-// ── Screen ────────────────────────────────────────────────────────────────────
+function SkeletonList() {
+  const anim = useRef(new Animated.Value(0.3)).current;
 
-export default function FeedScreen({ navigation }) {
-  const [whales,       setWhales]       = useState([]);
-  const [loading,      setLoading]      = useState(true);
-  const [refreshing,   setRefreshing]   = useState(false);
-  const [activeFilter, setActiveFilter] = useState('All');
-  const [error,        setError]        = useState(null);
-  const [cacheAge,     setCacheAge]     = useState(null);
-
-  // Persist filter choice
   useEffect(() => {
-    AsyncStorage.getItem(FILTER_KEY).then((v) => { if (v) setActiveFilter(v); });
-  }, []);
-
-  const handleFilterChange = useCallback((f) => {
-    setActiveFilter(f);
-    AsyncStorage.setItem(FILTER_KEY, f);
-  }, []);
-
-  const load = useCallback(async (forceRefresh = false) => {
-    try {
-      setError(null);
-      const data = await fetchWhaleActivity(forceRefresh);
-      setWhales(data);
-      setCacheAge(getCacheAge());
-    } catch {
-      setError('fetch');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  const onRefresh = () => { setRefreshing(true); load(true); };
-
-  const filtered = activeFilter === 'All'
-    ? whales
-    : whales.filter((w) => categoryToFilter[w.raw?.category] === activeFilter);
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(anim, { toValue: 0.8, duration: 700, useNativeDriver: true }),
+        Animated.timing(anim, { toValue: 0.3, duration: 700, useNativeDriver: true }),
+      ])
+    ).start();
+  }, [anim]);
 
   return (
-    <View style={styles.container}>
-
-      {/* Header */}
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.logo}>spout<Text style={styles.logoGreen}>er</Text></Text>
-          <Text style={styles.headerSub}>
-            {cacheAge !== null && cacheAge > 0
-              ? `● ${whales.length} markets · updated ${cacheAge}m ago`
-              : `● live · ${whales.length} active markets`}
-          </Text>
-        </View>
-      </View>
-
-      {/* Filters */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.filtersScroll}
-        contentContainerStyle={styles.filters}
-      >
-        {FILTERS.map((f) => (
-          <TouchableOpacity
-            key={f}
-            style={[styles.filter, f === activeFilter && styles.filterActive]}
-            onPress={() => handleFilterChange(f)}
-          >
-            <Text style={[styles.filterText, f === activeFilter && styles.filterTextActive]}>{f}</Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-
-      {/* Body */}
-      {loading ? (
-        <View style={styles.stateWrap}>
-          <Text style={styles.stateEmoji}>🐋</Text>
-          <ActivityIndicator color="#00c896" style={{ marginBottom: 8 }} />
-          <Text style={styles.stateText}>Scanning whale activity…</Text>
-        </View>
-      ) : error ? (
-        <View style={styles.stateWrap}>
-          <Text style={styles.stateEmoji}>📡</Text>
-          <Text style={styles.stateTitle}>The whales are hiding.</Text>
-          <Text style={styles.stateText}>Pull down to retry.</Text>
-          <TouchableOpacity
-            onPress={() => { setLoading(true); load(true); }}
-            style={styles.retryBtn}
-          >
-            <Text style={styles.retryText}>Retry</Text>
-          </TouchableOpacity>
-        </View>
-      ) : (
-        <ScrollView
-          style={styles.feed}
-          showsVerticalScrollIndicator={false}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#00c896" />
-          }
-        >
-          {filtered.length === 0 ? (
-            <View style={styles.emptyWrap}>
-              <Text style={styles.stateEmoji}>🔍</Text>
-              <Text style={styles.stateTitle}>No whales spotted here.</Text>
-              <Text style={styles.stateText}>Try a different category or pull to refresh.</Text>
-            </View>
-          ) : (
-            filtered.map((whale, i) => (
-              <WhaleCard
-                key={whale.id ?? whale.name}
-                whale={whale}
-                index={i}
-                onPress={() => navigation.navigate('WhaleProfile', { whale })}
-              />
-            ))
-          )}
-          <View style={{ height: 24 }} />
-        </ScrollView>
-      )}
+    <View>
+      <SkeletonCard opacity={anim} />
+      <SkeletonCard opacity={anim} />
+      <SkeletonCard opacity={anim} />
     </View>
   );
 }
 
+// ─── WhaleTrade card ──────────────────────────────────────────────────────────
+
+function WhaleTrade({ item, onPress }) {
+  const badgeLabel = CATEGORY_BADGE[item.category] ?? CATEGORY_BADGE.other;
+  const badgeColor = CATEGORY_COLOR[item.category] ?? CATEGORY_COLOR.other;
+  const isYes = item.direction === 'YES';
+  const amountColor = isYes ? '#00c896' : '#ff4d4d';
+  const outcomeText =
+    item.outcome.length > 60 ? item.outcome.slice(0, 57) + '…' : item.outcome;
+
+  const handleShare = async () => {
+    try {
+      await Share.share({
+        message: `🐋 Whale alert on @Spouter: ${item.pseudonym} just bet ${item.usdcDisplay} on "${item.title}" — ${item.outcome}\nTrack live whale trades on Polymarket 👉 https://spouter.app\n#Polymarket #Spouter #WhaleAlert`,
+      });
+    } catch (_) {}
+  };
+
+  return (
+    <TouchableOpacity style={styles.card} onPress={() => onPress && onPress(item)} activeOpacity={0.8}>
+      {/* Row 1 */}
+      <View style={styles.cardRow}>
+        <View style={[styles.badge, { borderColor: badgeColor }]}>
+          <Text style={[styles.badgeText, { color: badgeColor }]}>{badgeLabel}</Text>
+        </View>
+        <Text style={styles.timeAgo}>{item.timeAgo}</Text>
+      </View>
+
+      {/* Row 2 */}
+      <Text style={styles.cardTitle}>{item.title}</Text>
+
+      {/* Row 3 */}
+      <View style={styles.cardRow}>
+        <View style={[styles.chip, isYes ? styles.chipYes : styles.chipNo]}>
+          <Text style={[styles.chipText, isYes ? styles.chipTextYes : styles.chipTextNo]}>
+            BET {item.direction}
+          </Text>
+        </View>
+        <Text style={styles.outcomeText} numberOfLines={1}>{outcomeText}</Text>
+      </View>
+
+      {/* Row 4 */}
+      <Text style={[styles.amount, { color: amountColor }]}>{item.usdcDisplay}</Text>
+
+      {/* Row 5 */}
+      <View style={styles.cardRow}>
+        <Text style={styles.walletLine}>
+          <Text style={styles.pseudonym}>{item.pseudonym}</Text>
+          <Text style={styles.dot}> · </Text>
+          <Text style={styles.walletShort}>{item.walletShort}</Text>
+        </Text>
+        <TouchableOpacity onPress={handleShare} style={styles.shareBtn}>
+          <Text style={styles.shareBtnText}>Share 🔗</Text>
+        </TouchableOpacity>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+// ─── FeedScreen ───────────────────────────────────────────────────────────────
+
+export default function FeedScreen({ navigation }) {
+  const [trades, setTrades] = useState([]);
+  const [status, setStatus] = useState('connecting');
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const trackerRef = useRef(null);
+  const autoRefreshRef = useRef(null);
+
+  const midnight = (() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d.getTime() / 1000;
+  })();
+
+  const todayCount = trades.filter((t) => t.timestamp >= midnight).length;
+
+  const handleTrade = useCallback((trade) => {
+    setTrades((prev) => {
+      const next = [trade, ...prev];
+      return next.length > 200 ? next.slice(0, 200) : next;
+    });
+    setLoading(false);
+  }, []);
+
+  const handleStatus = useCallback((s) => {
+    setStatus(s);
+    if (s !== 'connecting') setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    const tracker = new LiveTracker({
+      onTrade: handleTrade,
+      onStatus: handleStatus,
+    });
+    trackerRef.current = tracker;
+    tracker.start();
+
+    // Auto-refresh every 60s for empty/error states
+    autoRefreshRef.current = setInterval(() => {
+      if (trackerRef.current) trackerRef.current.refresh();
+    }, 60_000);
+
+    return () => {
+      tracker.stop();
+      if (autoRefreshRef.current) clearInterval(autoRefreshRef.current);
+    };
+  }, [handleTrade, handleStatus]);
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    if (trackerRef.current) trackerRef.current.refresh();
+    setTimeout(() => setRefreshing(false), 1500);
+  }, []);
+
+  const handleCardPress = useCallback(
+    (item) => {
+      navigation.navigate('WhaleProfile', { whale: item });
+    },
+    [navigation]
+  );
+
+  const isLive = status === 'live';
+  const isError = status === 'error';
+
+  const renderItem = useCallback(
+    ({ item }) => <WhaleTrade item={item} onPress={handleCardPress} />,
+    [handleCardPress]
+  );
+
+  const ListEmpty = () => {
+    if (loading) return <SkeletonList />;
+    if (isError) {
+      return (
+        <View style={styles.emptyContainer}>
+          <Text style={styles.emptyIcon}>📡</Text>
+          <Text style={styles.emptyText}>Lost connection.</Text>
+          <TouchableOpacity
+            style={styles.retryBtn}
+            onPress={() => {
+              setLoading(true);
+              if (trackerRef.current) trackerRef.current.refresh();
+            }}
+          >
+            <Text style={styles.retryText}>Tap to retry</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+    return (
+      <View style={styles.emptyContainer}>
+        <Text style={styles.emptyIcon}>🐋</Text>
+        <Text style={styles.emptyText}>No $100K+ trades yet today.</Text>
+        <Text style={styles.emptySubtext}>Check back soon.</Text>
+      </View>
+    );
+  };
+
+  return (
+    <View style={styles.screen}>
+      {/* Header */}
+      <View style={styles.header}>
+        <View style={styles.headerTop}>
+          <Text style={styles.logo}>
+            spout<Text style={styles.logoAccent}>er</Text>
+          </Text>
+          <View style={[styles.statusPill, isLive ? styles.pillLive : styles.pillPolling]}>
+            <View style={[styles.statusDot, isLive ? styles.dotLive : styles.dotPolling]} />
+            <Text style={styles.statusText}>{isLive ? 'LIVE' : status.toUpperCase()}</Text>
+          </View>
+        </View>
+        <Text style={styles.headerSub}>Live Polymarket whale tracker</Text>
+        <Text style={styles.todayCount}>
+          {todayCount} whale{todayCount !== 1 ? 's' : ''} spotted today
+        </Text>
+      </View>
+
+      {/* Feed */}
+      <FlatList
+        data={trades}
+        keyExtractor={(item) => item.id}
+        renderItem={renderItem}
+        contentContainerStyle={styles.listContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#00c896"
+          />
+        }
+        ListEmptyComponent={ListEmpty}
+        removeClippedSubviews
+        maxToRenderPerBatch={10}
+        windowSize={10}
+      />
+    </View>
+  );
+}
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
-  container:    { flex: 1, backgroundColor: '#0a0a0a' },
-  header:       { paddingHorizontal: 16, paddingTop: 60, paddingBottom: 6 },
-  logo:         { fontSize: 22, fontWeight: '700', color: '#fff', letterSpacing: 1 },
-  logoGreen:    { color: '#ff69b4' },
-  headerSub:    { fontSize: 11, color: '#555', marginTop: 2 },
-
-  filtersScroll: { flexGrow: 0 },
-  filters:      { paddingHorizontal: 12, paddingVertical: 8, gap: 6, flexDirection: 'row' },
-  filter:       { paddingHorizontal: 12, paddingVertical: 4, borderRadius: 20, borderWidth: 0.5, borderColor: '#333' },
-  filterActive: { backgroundColor: '#0a2a1a', borderColor: '#00c896' },
-  filterText:   { fontSize: 12, color: '#555' },
-  filterTextActive: { color: '#00c896' },
-
-  feed:         { flex: 1, paddingHorizontal: 12 },
-
-  stateWrap:    { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 32 },
-  stateEmoji:   { fontSize: 36, marginBottom: 4 },
-  stateTitle:   { fontSize: 15, fontWeight: '700', color: '#ccc', textAlign: 'center' },
-  stateText:    { fontSize: 12, color: '#555', textAlign: 'center' },
-  emptyWrap:    { alignItems: 'center', paddingTop: 60, gap: 8 },
-  retryBtn:     { marginTop: 8, paddingHorizontal: 20, paddingVertical: 8, borderRadius: 8, borderWidth: 0.5, borderColor: '#00c896' },
-  retryText:    { color: '#00c896', fontSize: 12, fontWeight: '600' },
-
-  card:         { borderRadius: 14, padding: 12, marginBottom: 8, borderWidth: 0.5 },
-
-  cardTop:      { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
-  scoreBadge:   { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, borderWidth: 0.5 },
-  scoreText:    { fontSize: 10, fontWeight: '800' },
-  whaleName:    { fontSize: 13, fontWeight: '700', color: '#fff', flex: 1 },
-  walletAddr:   { fontSize: 9, color: '#444', fontFamily: 'monospace' },
-  badge:        { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
-  badgeText:    { fontSize: 10, fontWeight: '600' },
-
-  cardBetRow:   { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
-  direction:    { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4 },
-  directionText:{ fontSize: 11, fontWeight: '700' },
-  market:       { fontSize: 11, color: '#666', flex: 1 },
-
-  amount:       { fontSize: 22, fontWeight: '800', marginBottom: 6 },
-
-  cardBottom:   { flexDirection: 'row', justifyContent: 'space-between' },
-  time:         { fontSize: 10, color: '#555' },
-  stat:         { fontSize: 10 },
+  screen: {
+    flex: 1,
+    backgroundColor: '#0a0a0a',
+  },
+  header: {
+    paddingTop: 56,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#1a1a1a',
+  },
+  headerTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  logo: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: '#fff',
+  },
+  logoAccent: {
+    color: '#ff69b4',
+  },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 20,
+    gap: 5,
+  },
+  pillLive: {
+    backgroundColor: '#0a2a1a',
+  },
+  pillPolling: {
+    backgroundColor: '#222',
+  },
+  statusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  dotLive: {
+    backgroundColor: '#00c896',
+  },
+  dotPolling: {
+    backgroundColor: '#666',
+  },
+  statusText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#aaa',
+    letterSpacing: 0.5,
+  },
+  headerSub: {
+    fontSize: 13,
+    color: '#666',
+    marginTop: 4,
+  },
+  todayCount: {
+    fontSize: 12,
+    color: '#00c896',
+    marginTop: 2,
+  },
+  listContent: {
+    padding: 12,
+    paddingBottom: 40,
+  },
+  // Card
+  card: {
+    backgroundColor: '#111',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#1e1e1e',
+  },
+  cardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  badge: {
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  badgeText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  timeAgo: {
+    fontSize: 11,
+    color: '#555',
+  },
+  cardTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#fff',
+    marginVertical: 8,
+    lineHeight: 20,
+  },
+  chip: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+    marginRight: 8,
+  },
+  chipYes: {
+    backgroundColor: '#0a2a1a',
+  },
+  chipNo: {
+    backgroundColor: '#2a0a0a',
+  },
+  chipText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  chipTextYes: {
+    color: '#00c896',
+  },
+  chipTextNo: {
+    color: '#ff4d4d',
+  },
+  outcomeText: {
+    fontSize: 12,
+    color: '#888',
+    flex: 1,
+  },
+  amount: {
+    fontSize: 28,
+    fontWeight: '800',
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  walletLine: {
+    flex: 1,
+  },
+  pseudonym: {
+    fontSize: 13,
+    color: '#ccc',
+    fontWeight: '600',
+  },
+  dot: {
+    color: '#444',
+  },
+  walletShort: {
+    fontSize: 12,
+    color: '#555',
+    fontFamily: 'monospace',
+  },
+  shareBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    backgroundColor: '#1a1a1a',
+    borderRadius: 8,
+  },
+  shareBtnText: {
+    fontSize: 12,
+    color: '#aaa',
+  },
+  // Skeleton
+  skRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  skRow2: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 10,
+  },
+  skBox: {
+    backgroundColor: '#222',
+    borderRadius: 6,
+  },
+  // Empty / Error
+  emptyContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: 80,
+    gap: 10,
+  },
+  emptyIcon: {
+    fontSize: 48,
+  },
+  emptyText: {
+    fontSize: 16,
+    color: '#666',
+    fontWeight: '600',
+  },
+  emptySubtext: {
+    fontSize: 13,
+    color: '#444',
+  },
+  retryBtn: {
+    marginTop: 8,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    backgroundColor: '#1a1a1a',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  retryText: {
+    fontSize: 14,
+    color: '#00c896',
+    fontWeight: '600',
+  },
 });
