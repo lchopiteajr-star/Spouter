@@ -1,11 +1,11 @@
 const WS_URL = 'wss://ws-live-data.polymarket.com';
 const REST_URL =
-  'https://data-api.polymarket.com/trades?filterType=CASH&filterAmount=100000&limit=50';
+  'https://data-api.polymarket.com/trades?filterType=CASH&filterAmount=50000&limit=50';
 const PING_INTERVAL = 10_000;
 const POLL_INTERVAL = 30_000;
 const RECONNECT_DELAY = 5_000;
 const MAX_SEEN = 500;
-const MIN_USDC = 100_000;
+const MIN_USDC = 50_000;
 
 export const CATEGORY_BADGE = {
   sports: '⚽ Sports',

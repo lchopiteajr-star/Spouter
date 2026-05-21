@@ -7,9 +7,19 @@ import {
   Animated,
   RefreshControl,
   Share,
+  ScrollView,
 } from 'react-native';
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { LiveTracker, CATEGORY_BADGE, CATEGORY_COLOR } from '../services/liveTracker';
+
+const FILTERS = [
+  { label: 'All',    min: 0,           proOnly: false },
+  { label: '$50K+',  min: 50_000,      proOnly: true  },
+  { label: '$100K+', min: 100_000,     proOnly: false },
+  { label: '$250K+', min: 250_000,     proOnly: false },
+  { label: '$500K+', min: 500_000,     proOnly: false },
+  { label: '$1M+',   min: 1_000_000,   proOnly: false },
+];
 
 // ─── Skeleton ────────────────────────────────────────────────────────────────
 
@@ -50,6 +60,46 @@ function SkeletonList() {
       <SkeletonCard opacity={anim} />
       <SkeletonCard opacity={anim} />
     </View>
+  );
+}
+
+// ─── Filter bar ───────────────────────────────────────────────────────────────
+
+function FilterBar({ activeFilter, onSelect, isPro }) {
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.filterBar}
+    >
+      {FILTERS.map((f) => {
+        const locked = f.proOnly && !isPro;
+        const active = f.min === activeFilter;
+        return (
+          <TouchableOpacity
+            key={f.label}
+            style={[
+              styles.filterChip,
+              active && styles.filterChipActive,
+              locked && styles.filterChipLocked,
+            ]}
+            onPress={() => !locked && onSelect(f.min)}
+            activeOpacity={locked ? 1 : 0.7}
+          >
+            <Text
+              style={[
+                styles.filterChipText,
+                active && styles.filterChipTextActive,
+                locked && styles.filterChipTextLocked,
+              ]}
+            >
+              {f.label}
+            </Text>
+            {locked && <Text style={styles.proTag}> PRO</Text>}
+          </TouchableOpacity>
+        );
+      })}
+    </ScrollView>
   );
 }
 
@@ -131,8 +181,8 @@ function EmptyState({ loading, isError, onRetry }) {
   return (
     <View style={styles.emptyContainer}>
       <Text style={styles.emptyIcon}>🐋</Text>
-      <Text style={styles.emptyText}>No $100K+ trades yet today.</Text>
-      <Text style={styles.emptySubtext}>Check back soon.</Text>
+      <Text style={styles.emptyText}>No trades matched this filter.</Text>
+      <Text style={styles.emptySubtext}>Check back soon or try a lower threshold.</Text>
     </View>
   );
 }
@@ -144,16 +194,32 @@ export default function FeedScreen({ navigation }) {
   const [status, setStatus] = useState('connecting');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [activeFilter, setActiveFilter] = useState(100_000);
+  const isPro = false;
   const trackerRef = useRef(null);
   const autoRefreshRef = useRef(null);
 
-  const midnight = (() => {
+  const tierMin = isPro ? 50_000 : 100_000;
+  const effectiveMin = activeFilter === 0 ? tierMin : activeFilter;
+
+  const midnight = useMemo(() => {
     const d = new Date();
     d.setHours(0, 0, 0, 0);
     return d.getTime() / 1000;
-  })();
+  }, []);
 
-  const todayCount = trades.filter((t) => t.timestamp >= midnight).length;
+  const filteredTrades = useMemo(
+    () =>
+      trades
+        .filter((t) => t.usdc >= effectiveMin)
+        .sort((a, b) => b.usdc - a.usdc),
+    [trades, effectiveMin]
+  );
+
+  const todayCount = useMemo(
+    () => filteredTrades.filter((t) => t.timestamp >= midnight).length,
+    [filteredTrades, midnight]
+  );
 
   const handleTrade = useCallback((trade) => {
     setTrades((prev) => {
@@ -208,16 +274,19 @@ export default function FeedScreen({ navigation }) {
     [handleCardPress]
   );
 
-  const listEmpty = useCallback(() => (
-    <EmptyState
-      loading={loading}
-      isError={isError}
-      onRetry={() => {
-        setLoading(true);
-        if (trackerRef.current) trackerRef.current.refresh();
-      }}
-    />
-  ), [loading, isError]);
+  const listEmpty = useCallback(
+    () => (
+      <EmptyState
+        loading={loading}
+        isError={isError}
+        onRetry={() => {
+          setLoading(true);
+          if (trackerRef.current) trackerRef.current.refresh();
+        }}
+      />
+    ),
+    [loading, isError]
+  );
 
   return (
     <View style={styles.screen}>
@@ -238,9 +307,12 @@ export default function FeedScreen({ navigation }) {
         </Text>
       </View>
 
+      {/* Filter bar */}
+      <FilterBar activeFilter={activeFilter} onSelect={setActiveFilter} isPro={isPro} />
+
       {/* Feed */}
       <FlatList
-        data={trades}
+        data={filteredTrades}
         keyExtractor={(item) => item.id}
         renderItem={renderItem}
         contentContainerStyle={styles.listContent}
@@ -327,6 +399,46 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#00c896',
     marginTop: 2,
+  },
+  // Filter bar
+  filterBar: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  filterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 20,
+    backgroundColor: '#131313',
+    borderWidth: 1,
+    borderColor: '#2a2a2a',
+  },
+  filterChipActive: {
+    backgroundColor: '#0a2a1a',
+    borderColor: '#00c896',
+  },
+  filterChipLocked: {
+    opacity: 0.45,
+  },
+  filterChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#777',
+  },
+  filterChipTextActive: {
+    color: '#00c896',
+  },
+  filterChipTextLocked: {
+    color: '#555',
+  },
+  proTag: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#ff69b4',
+    letterSpacing: 0.5,
   },
   listContent: {
     padding: 12,
