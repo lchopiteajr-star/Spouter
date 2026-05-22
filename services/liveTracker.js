@@ -235,12 +235,17 @@ export class LiveTracker {
   async _poll() {
     try {
       const res = await fetch(REST_URL);
+      console.log('[Spouter] REST fetch status:', res.status, 'url:', REST_URL);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      console.log('[Spouter] REST trades returned:', Array.isArray(data) ? data.length : 'not array', 'MIN_USDC:', MIN_USDC);
       if (Array.isArray(data)) {
+        const passing = data.filter(r => (Number(r.size ?? 0) * Number(r.price ?? 0)) >= MIN_USDC);
+        console.log('[Spouter] Trades passing $' + (MIN_USDC/1000) + 'K filter:', passing.length, '/', data.length);
         data.forEach((raw) => this._processTrade(raw));
       }
-    } catch (_) {
+    } catch (err) {
+      console.log('[Spouter] REST fetch error:', err.message);
       this._onStatus('error');
     }
   }
