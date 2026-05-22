@@ -333,7 +333,6 @@ export default function FeedScreen({ navigation }) {
         renderItem={renderItem}
         contentContainerStyle={styles.listContent}
         refreshControl={
-          {/* tintColor transparent hides the native iOS spinner; our banner takes over */}
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="transparent" />
         }
         ListHeaderComponent={<RefreshBanner visible={refreshing} />}
