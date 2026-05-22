@@ -279,10 +279,6 @@ export default function FeedScreen({ navigation }) {
     setTimeout(finish, 2000);
   }, []);
 
-  const handleFilterSelect = useCallback((min) => {
-    setActiveFilter(min);
-    if (min > 0 && trackerRef.current) trackerRef.current.fetchForFilter(min);
-  }, []);
 
   const handleCardPress = useCallback(
     (item) => navigation.navigate('WhaleProfile', { whale: item }),
@@ -321,7 +317,7 @@ export default function FeedScreen({ navigation }) {
       </View>
 
       {/* Filter bar */}
-      <FilterBar activeFilter={activeFilter} onSelect={handleFilterSelect} />
+      <FilterBar activeFilter={activeFilter} onSelect={setActiveFilter} />
 
       {/* Feed */}
       <FlatList

@@ -1,13 +1,12 @@
 const WS_URL = 'wss://ws-live-data.polymarket.com';
 const PING_INTERVAL = 10_000;
-const POLL_INTERVAL = 30_000;
+const POLL_INTERVAL = 60_000;
+const STALE_CHECK_INTERVAL = 2 * 60_000;
+const STALE_THRESHOLD = 10 * 60_000;
 const RECONNECT_DELAY = 5_000;
 const MAX_SEEN = 10_000;
 const MIN_USDC = 50_000;
-
-function restUrl(filterAmount, limit = 500) {
-  return `https://data-api.polymarket.com/trades?filterType=CASH&filterAmount=${filterAmount}&limit=${limit}`;
-}
+const FETCH_URL = `https://data-api.polymarket.com/trades?filterType=CASH&filterAmount=50000&limit=500`;
 
 export const CATEGORY_BADGE = {
   sports: '⚽ Sports',
@@ -89,9 +88,11 @@ export class LiveTracker {
     this._ws = null;
     this._pingTimer = null;
     this._pollTimer = null;
+    this._staleTimer = null;
     this._reconnectTimer = null;
     this._seen = new Set();
     this._stopped = false;
+    this._lastTradeAt = 0;
   }
 
   start() {
@@ -111,38 +112,30 @@ export class LiveTracker {
   }
 
   refresh() {
-    this._fetch(100_000);
-  }
-
-  // Called when user taps a filter chip — re-fetches at that threshold
-  fetchForFilter(amount) {
-    if (!this._stopped) this._fetch(amount);
+    this._fetch();
   }
 
   async _initialLoad() {
-    // Step 1: load recent $100K+ trades immediately
-    const newCount = await this._fetch(100_000);
-    // Step 2: if feed is thin, supplement with $50K+ trades
-    if (newCount < 20) await this._fetch(50_000);
-    // Step 3: start continuous 30s polling to catch anything WebSocket misses
+    await this._fetch();
     this._clearPollTimer();
-    this._pollTimer = setInterval(() => this._fetch(100_000), POLL_INTERVAL);
+    this._pollTimer = setInterval(() => this._fetch(), POLL_INTERVAL);
+    this._staleTimer = setInterval(() => {
+      const age = Date.now() - this._lastTradeAt;
+      if (age > STALE_THRESHOLD) this._fetch();
+    }, STALE_CHECK_INTERVAL);
   }
 
-  async _fetch(filterAmount) {
-    if (this._stopped) return 0;
+  async _fetch() {
+    if (this._stopped) return;
     try {
-      const res = await fetch(restUrl(filterAmount));
+      const res = await fetch(FETCH_URL);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      let newCount = 0;
       if (Array.isArray(data)) {
-        data.forEach((raw) => { if (this._processTrade(raw)) newCount++; });
+        data.forEach((raw) => this._processTrade(raw));
       }
-      return newCount;
     } catch (_) {
-      if (filterAmount === 100_000) this._onStatus('error');
-      return 0;
+      this._onStatus('error');
     }
   }
 
@@ -198,22 +191,22 @@ export class LiveTracker {
     }, PING_INTERVAL);
   }
 
-  // Returns true if trade was new (not a duplicate)
   _processTrade(raw) {
     const trade = normaliseTrade(raw);
-    if (!trade) return false;
-    if (this._seen.has(trade.id)) return false;
+    if (!trade) return;
+    if (this._seen.has(trade.id)) return;
     if (this._seen.size >= MAX_SEEN) {
       this._seen.delete(this._seen.values().next().value);
     }
     this._seen.add(trade.id);
+    this._lastTradeAt = Date.now();
     this._onTrade(trade);
-    return true;
   }
 
   _clearTimers() {
     this._clearPingTimer();
     this._clearPollTimer();
+    this._clearStaleTimer();
     this._clearReconnectTimer();
   }
   _clearPingTimer() {
@@ -221,6 +214,9 @@ export class LiveTracker {
   }
   _clearPollTimer() {
     if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
+  }
+  _clearStaleTimer() {
+    if (this._staleTimer) { clearInterval(this._staleTimer); this._staleTimer = null; }
   }
   _clearReconnectTimer() {
     if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
