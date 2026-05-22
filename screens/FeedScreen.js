@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { LiveTracker, CATEGORY_BADGE, CATEGORY_COLOR } from '../services/liveTracker';
+import { fetchGrade, getGrade } from '../services/gradeCache';
 
 const FILTERS = [
   { label: 'All',    min: 0,           proOnly: false },
@@ -20,6 +21,22 @@ const FILTERS = [
   { label: '$500K+', min: 500_000,     proOnly: false },
   { label: '$1M+',   min: 1_000_000,   proOnly: false },
 ];
+
+const GRADE_COLORS = {
+  'A+': { bg: '#0a2a1a', border: '#00c896', text: '#00c896' },
+  'A':  { bg: '#0a2a1a', border: '#00c896', text: '#00c896' },
+  'B':  { bg: '#0a1527', border: '#00aaff', text: '#00aaff' },
+  'C':  { bg: '#2a1500', border: '#f7931a', text: '#f7931a' },
+  'D':  { bg: '#2a0a0a', border: '#ff4d4d', text: '#ff4d4d' },
+};
+
+function formatPnl(pnl) {
+  const abs = Math.abs(pnl);
+  const prefix = pnl >= 0 ? '+' : '-';
+  if (abs >= 1_000_000) return `${prefix}$${(abs / 1_000_000).toFixed(1)}M`;
+  if (abs >= 1_000) return `${prefix}$${Math.round(abs / 1_000)}K`;
+  return `${prefix}$${Math.round(abs)}`;
+}
 
 // ─── Live indicator ───────────────────────────────────────────────────────────
 
@@ -133,13 +150,14 @@ function FilterBar({ activeFilter, onSelect, isPro }) {
 
 // ─── WhaleTrade card ──────────────────────────────────────────────────────────
 
-function WhaleTrade({ item, onPress }) {
+function WhaleTrade({ item, onPress, grade }) {
   const badgeLabel = CATEGORY_BADGE[item.category] ?? CATEGORY_BADGE.other;
   const badgeColor = CATEGORY_COLOR[item.category] ?? CATEGORY_COLOR.other;
   const isYes = item.direction === 'YES';
   const amountColor = isYes ? '#00c896' : '#ff4d4d';
   const outcomeText =
     item.outcome.length > 60 ? item.outcome.slice(0, 57) + '…' : item.outcome;
+  const gc = grade ? (GRADE_COLORS[grade.letter] ?? GRADE_COLORS['C']) : null;
 
   const handleShare = async () => {
     try {
@@ -151,12 +169,19 @@ function WhaleTrade({ item, onPress }) {
 
   return (
     <TouchableOpacity style={styles.card} onPress={() => onPress && onPress(item)} activeOpacity={0.8}>
-      {/* Row 1 */}
+      {/* Row 1: category badge + grade chip + timeAgo */}
       <View style={styles.cardRow}>
         <View style={[styles.badge, { borderColor: badgeColor }]}>
           <Text style={[styles.badgeText, { color: badgeColor }]}>{badgeLabel}</Text>
         </View>
-        <Text style={styles.timeAgo}>{item.timeAgo}</Text>
+        <View style={styles.cardRowRight}>
+          {gc && (
+            <View style={[styles.gradeBadge, { backgroundColor: gc.bg, borderColor: gc.border }]}>
+              <Text style={[styles.gradeText, { color: gc.text }]}>{grade.letter}</Text>
+            </View>
+          )}
+          <Text style={styles.timeAgo}>{item.timeAgo}</Text>
+        </View>
       </View>
 
       {/* Row 2 */}
@@ -172,10 +197,17 @@ function WhaleTrade({ item, onPress }) {
         <Text style={styles.outcomeText} numberOfLines={1}>{outcomeText}</Text>
       </View>
 
-      {/* Row 4 */}
+      {/* Row 4: bet amount */}
       <Text style={[styles.amount, { color: amountColor }]}>{item.usdcDisplay}</Text>
 
-      {/* Row 5 */}
+      {/* Row 4b: PnL from last 100 trades */}
+      {grade && (
+        <Text style={[styles.pnlHint, { color: grade.totalPnl >= 0 ? '#00c896' : '#ff4d4d' }]}>
+          {formatPnl(grade.totalPnl)} last 100 trades · {(grade.winRate * 100).toFixed(0)}% win rate
+        </Text>
+      )}
+
+      {/* Row 5: wallet + share */}
       <View style={styles.cardRow}>
         <Text style={styles.walletLine}>
           <Text style={styles.pseudonym}>{item.pseudonym}</Text>
@@ -223,9 +255,11 @@ export default function FeedScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeFilter, setActiveFilter] = useState(100_000);
+  const [gradeMap, setGradeMap] = useState({});
   const isPro = false;
   const trackerRef = useRef(null);
   const autoRefreshRef = useRef(null);
+  const fetchedWallets = useRef(new Set());
 
   const tierMin = isPro ? 50_000 : 100_000;
   const effectiveMin = activeFilter === 0 ? tierMin : activeFilter;
@@ -242,6 +276,21 @@ export default function FeedScreen({ navigation }) {
     () => new Set(trades.map((t) => t.wallet).filter(Boolean)).size,
     [trades]
   );
+
+  // Fetch grades for wallets we haven't seen yet
+  useEffect(() => {
+    const newWallets = trades
+      .map((t) => t.wallet)
+      .filter((w) => w && !fetchedWallets.current.has(w));
+    const unique = [...new Set(newWallets)];
+    if (!unique.length) return;
+    unique.forEach((wallet) => {
+      fetchedWallets.current.add(wallet);
+      fetchGrade(wallet).then((grade) => {
+        if (grade) setGradeMap((prev) => ({ ...prev, [wallet]: grade }));
+      });
+    });
+  }, [trades]);
 
   const handleTrade = useCallback((trade) => {
     setTrades((prev) => {
@@ -291,8 +340,10 @@ export default function FeedScreen({ navigation }) {
   const isError = status === 'error';
 
   const renderItem = useCallback(
-    ({ item }) => <WhaleTrade item={item} onPress={handleCardPress} />,
-    [handleCardPress]
+    ({ item }) => (
+      <WhaleTrade item={item} onPress={handleCardPress} grade={gradeMap[item.wallet] ?? null} />
+    ),
+    [handleCardPress, gradeMap]
   );
 
   const listEmpty = useCallback(
@@ -469,9 +520,30 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
   },
+  cardRowRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  gradeBadge: {
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  gradeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
   timeAgo: {
     fontSize: 11,
     color: '#555',
+  },
+  pnlHint: {
+    fontSize: 11,
+    fontWeight: '600',
+    marginBottom: 6,
   },
   cardTitle: {
     fontSize: 14,
