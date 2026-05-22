@@ -85,6 +85,42 @@ function LiveIndicator({ uniqueWhales }) {
   );
 }
 
+// ─── Custom refresh banner ────────────────────────────────────────────────────
+
+function RefreshBanner({ visible }) {
+  const pos = useRef(new Animated.Value(0)).current;
+  const scale = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (!visible) return;
+    const anim = Animated.loop(
+      Animated.sequence([
+        Animated.parallel([
+          Animated.timing(pos,   { toValue: -14, duration: 420, useNativeDriver: true }),
+          Animated.timing(scale, { toValue: 1.15, duration: 420, useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(pos,   { toValue: 0, duration: 420, useNativeDriver: true }),
+          Animated.timing(scale, { toValue: 1, duration: 420, useNativeDriver: true }),
+        ]),
+      ])
+    );
+    anim.start();
+    return () => { anim.stop(); pos.setValue(0); scale.setValue(1); };
+  }, [visible, pos, scale]);
+
+  if (!visible) return null;
+
+  return (
+    <View style={styles.refreshBanner}>
+      <Animated.Text style={[styles.refreshWhale, { transform: [{ translateY: pos }, { scale }] }]}>
+        🐋
+      </Animated.Text>
+      <Text style={styles.refreshLabel}>Fetching trades…</Text>
+    </View>
+  );
+}
+
 // ─── Filter bar ───────────────────────────────────────────────────────────────
 
 function FilterBar({ activeFilter, onSelect }) {
@@ -297,8 +333,10 @@ export default function FeedScreen({ navigation }) {
         renderItem={renderItem}
         contentContainerStyle={styles.listContent}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#00c896" />
+          {/* tintColor transparent hides the native iOS spinner; our banner takes over */}
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="transparent" />
         }
+        ListHeaderComponent={<RefreshBanner visible={refreshing} />}
         ListEmptyComponent={listEmpty}
         removeClippedSubviews
         maxToRenderPerBatch={10}
@@ -322,12 +360,29 @@ const styles = StyleSheet.create({
     borderBottomColor: '#1a1a1a',
   },
   logo: { fontSize: 26, fontWeight: '800', color: '#fff' },
-  logoAccent: { color: '#ff69b4' },
+  logoAccent: { color: '#00c896' },
   liveWrap: { marginTop: 6, gap: 2 },
   liveRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#00c896' },
   liveLabel: { fontSize: 12, fontWeight: '700', color: '#00c896', letterSpacing: 0.8 },
   whaleCount: { fontSize: 11, color: '#444', marginTop: 1 },
+
+  // Custom refresh banner
+  refreshBanner: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 20,
+    gap: 8,
+  },
+  refreshWhale: {
+    fontSize: 36,
+  },
+  refreshLabel: {
+    fontSize: 12,
+    color: '#00c896',
+    fontWeight: '600',
+    letterSpacing: 0.4,
+  },
 
   // Filter bar
   filterScroll: { flexGrow: 0, flexShrink: 0, borderBottomWidth: 1, borderBottomColor: '#1a1a1a' },
