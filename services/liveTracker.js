@@ -1,11 +1,13 @@
 const WS_URL = 'wss://ws-live-data.polymarket.com';
-const REST_URL =
-  'https://data-api.polymarket.com/trades?filterType=CASH&filterAmount=50000&limit=50';
 const PING_INTERVAL = 10_000;
 const POLL_INTERVAL = 30_000;
 const RECONNECT_DELAY = 5_000;
-const MAX_SEEN = 500;
+const MAX_SEEN = 10_000;
 const MIN_USDC = 50_000;
+
+function restUrl(filterAmount, limit = 500) {
+  return `https://data-api.polymarket.com/trades?filterType=CASH&filterAmount=${filterAmount}&limit=${limit}`;
+}
 
 export const CATEGORY_BADGE = {
   sports: '⚽ Sports',
@@ -25,30 +27,10 @@ export const CATEGORY_COLOR = {
 
 function detectCategory(title = '') {
   const t = title.toLowerCase();
-  if (
-    /\b(nba|nfl|nhl|mlb|soccer|football|basketball|baseball|tennis|golf|ufc|mma|sport|team|match|game|championship|league|cup|tournament|player|score)\b/.test(
-      t
-    )
-  )
-    return 'sports';
-  if (
-    /\b(bitcoin|btc|eth|ethereum|crypto|token|defi|nft|blockchain|coin|solana|sol|bnb|doge|altcoin)\b/.test(
-      t
-    )
-  )
-    return 'crypto';
-  if (
-    /\b(president|election|senate|congress|democrat|republican|poll|vote|biden|trump|government|policy|minister|political|party|law|bill|supreme court)\b/.test(
-      t
-    )
-  )
-    return 'politics';
-  if (
-    /\b(movie|film|music|celebrity|award|oscar|grammy|actor|actress|singer|show|series|tv|box office|album|chart|entertainment)\b/.test(
-      t
-    )
-  )
-    return 'entertainment';
+  if (/\b(nba|nfl|nhl|mlb|soccer|football|basketball|baseball|tennis|golf|ufc|mma|sport|team|match|game|championship|league|cup|tournament|player|score)\b/.test(t)) return 'sports';
+  if (/\b(bitcoin|btc|eth|ethereum|crypto|token|defi|nft|blockchain|coin|solana|sol|bnb|doge|altcoin)\b/.test(t)) return 'crypto';
+  if (/\b(president|election|senate|congress|democrat|republican|poll|vote|biden|trump|government|policy|minister|political|party|law|bill|supreme court)\b/.test(t)) return 'politics';
+  if (/\b(movie|film|music|celebrity|award|oscar|grammy|actor|actress|singer|show|series|tv|box office|album|chart|entertainment)\b/.test(t)) return 'entertainment';
   return 'other';
 }
 
@@ -64,19 +46,11 @@ function walletShort(addr = '') {
 }
 
 function timeAgo(timestamp) {
-  const now = Date.now() / 1000;
-  const diff = now - timestamp;
+  const diff = Date.now() / 1000 - timestamp;
   if (diff < 60) return 'just now';
-  if (diff < 3600) {
-    const m = Math.floor(diff / 60);
-    return `${m} minute${m !== 1 ? 's' : ''} ago`;
-  }
-  if (diff < 86400) {
-    const h = Math.floor(diff / 3600);
-    return `${h} hour${h !== 1 ? 's' : ''} ago`;
-  }
-  const d = Math.floor(diff / 86400);
-  return `${d} day${d !== 1 ? 's' : ''} ago`;
+  if (diff < 3600) { const m = Math.floor(diff / 60); return `${m} minute${m !== 1 ? 's' : ''} ago`; }
+  if (diff < 86400) { const h = Math.floor(diff / 3600); return `${h} hour${h !== 1 ? 's' : ''} ago`; }
+  const d = Math.floor(diff / 86400); return `${d} day${d !== 1 ? 's' : ''} ago`;
 }
 
 function normaliseTrade(raw) {
@@ -85,17 +59,12 @@ function normaliseTrade(raw) {
   const usdc = size * price;
   if (usdc < MIN_USDC) return null;
 
-  const id =
-    raw.transactionHash ?? raw.id ?? `${raw.timestamp}${raw.proxyWallet}`;
+  const id = raw.transactionHash ?? raw.id ?? `${raw.timestamp}${raw.proxyWallet}`;
   const outcome = raw.outcome ?? '';
   const side = (raw.side ?? '').toUpperCase();
-  // BUY = going long on this outcome (YES), SELL = exiting/shorting (NO).
-  // Fall back to outcome text only if side is missing (e.g. older REST records).
-  const direction = side === 'BUY'
-    ? 'YES'
-    : side === 'SELL'
-      ? 'NO'
-      : /^(yes|up)/i.test(outcome) ? 'YES' : 'NO';
+  const direction = side === 'BUY' ? 'YES'
+    : side === 'SELL' ? 'NO'
+    : /^(yes|up)/i.test(outcome) ? 'YES' : 'NO';
 
   return {
     id,
@@ -129,26 +98,52 @@ export class LiveTracker {
     this._stopped = false;
     this._onStatus('connecting');
     this._connectWs();
-    // Populate feed immediately without waiting for WebSocket or poll timer
-    fetch(REST_URL)
-      .then((r) => (r.ok ? r.json() : []))
-      .then((data) => { if (Array.isArray(data)) data.forEach((raw) => this._processTrade(raw)); })
-      .catch(() => {});
+    this._initialLoad();
   }
 
   stop() {
     this._stopped = true;
     this._clearTimers();
     if (this._ws) {
-      try {
-        this._ws.close();
-      } catch (_) {}
+      try { this._ws.close(); } catch (_) {}
       this._ws = null;
     }
   }
 
   refresh() {
-    this._poll();
+    this._fetch(100_000);
+  }
+
+  // Called when user taps a filter chip — re-fetches at that threshold
+  fetchForFilter(amount) {
+    if (!this._stopped) this._fetch(amount);
+  }
+
+  async _initialLoad() {
+    // Step 1: load recent $100K+ trades immediately
+    const newCount = await this._fetch(100_000);
+    // Step 2: if feed is thin, supplement with $50K+ trades
+    if (newCount < 20) await this._fetch(50_000);
+    // Step 3: start continuous 30s polling to catch anything WebSocket misses
+    this._clearPollTimer();
+    this._pollTimer = setInterval(() => this._fetch(100_000), POLL_INTERVAL);
+  }
+
+  async _fetch(filterAmount) {
+    if (this._stopped) return 0;
+    try {
+      const res = await fetch(restUrl(filterAmount));
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      let newCount = 0;
+      if (Array.isArray(data)) {
+        data.forEach((raw) => { if (this._processTrade(raw)) newCount++; });
+      }
+      return newCount;
+    } catch (_) {
+      if (filterAmount === 100_000) this._onStatus('error');
+      return 0;
+    }
   }
 
   _connectWs() {
@@ -158,18 +153,12 @@ export class LiveTracker {
       this._ws = ws;
 
       ws.onopen = () => {
-        if (this._stopped) {
-          ws.close();
-          return;
-        }
-        ws.send(
-          JSON.stringify({
-            action: 'subscribe',
-            subscriptions: [{ topic: 'activity', type: 'trades' }],
-          })
-        );
+        if (this._stopped) { ws.close(); return; }
+        ws.send(JSON.stringify({
+          action: 'subscribe',
+          subscriptions: [{ topic: 'activity', type: 'trades' }],
+        }));
         this._onStatus('live');
-        this._clearPollTimer();
         this._clearReconnectTimer();
         this._startPing(ws);
       };
@@ -177,11 +166,7 @@ export class LiveTracker {
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
-          if (
-            msg.topic === 'activity' &&
-            msg.type === 'trades' &&
-            msg.payload
-          ) {
+          if (msg.topic === 'activity' && msg.type === 'trades' && msg.payload) {
             this._processTrade(msg.payload);
           }
         } catch (_) {}
@@ -191,76 +176,39 @@ export class LiveTracker {
         if (this._stopped) return;
         this._clearPingTimer();
         this._onStatus('polling');
-        this._startPolling();
-        this._reconnectTimer = setTimeout(() => {
-          this._connectWs();
-        }, RECONNECT_DELAY);
+        this._reconnectTimer = setTimeout(() => this._connectWs(), RECONNECT_DELAY);
       };
 
       ws.onerror = () => {
         if (this._stopped) return;
         this._clearPingTimer();
-        try {
-          ws.close();
-        } catch (_) {}
+        try { ws.close(); } catch (_) {}
         this._ws = null;
         this._onStatus('polling');
-        this._startPolling();
       };
     } catch (_) {
-      if (!this._stopped) {
-        this._onStatus('polling');
-        this._startPolling();
-      }
+      if (!this._stopped) this._onStatus('polling');
     }
   }
 
   _startPing(ws) {
     this._clearPingTimer();
     this._pingTimer = setInterval(() => {
-      if (ws.readyState === 1) {
-        try {
-          ws.send('ping');
-        } catch (_) {}
-      }
+      if (ws.readyState === 1) { try { ws.send('ping'); } catch (_) {} }
     }, PING_INTERVAL);
   }
 
-  _startPolling() {
-    this._poll();
-    this._clearPollTimer();
-    this._pollTimer = setInterval(() => this._poll(), POLL_INTERVAL);
-  }
-
-  async _poll() {
-    try {
-      const res = await fetch(REST_URL);
-      console.log('[Spouter] REST fetch status:', res.status, 'url:', REST_URL);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      console.log('[Spouter] REST trades returned:', Array.isArray(data) ? data.length : 'not array', 'MIN_USDC:', MIN_USDC);
-      if (Array.isArray(data)) {
-        const passing = data.filter(r => (Number(r.size ?? 0) * Number(r.price ?? 0)) >= MIN_USDC);
-        console.log('[Spouter] Trades passing $' + (MIN_USDC/1000) + 'K filter:', passing.length, '/', data.length);
-        data.forEach((raw) => this._processTrade(raw));
-      }
-    } catch (err) {
-      console.log('[Spouter] REST fetch error:', err.message);
-      this._onStatus('error');
-    }
-  }
-
+  // Returns true if trade was new (not a duplicate)
   _processTrade(raw) {
     const trade = normaliseTrade(raw);
-    if (!trade) return;
-    if (this._seen.has(trade.id)) return;
-
+    if (!trade) return false;
+    if (this._seen.has(trade.id)) return false;
     if (this._seen.size >= MAX_SEEN) {
-      const first = this._seen.values().next().value;
-      this._seen.delete(first);
+      this._seen.delete(this._seen.values().next().value);
     }
     this._seen.add(trade.id);
     this._onTrade(trade);
+    return true;
   }
 
   _clearTimers() {
@@ -268,25 +216,13 @@ export class LiveTracker {
     this._clearPollTimer();
     this._clearReconnectTimer();
   }
-
   _clearPingTimer() {
-    if (this._pingTimer) {
-      clearInterval(this._pingTimer);
-      this._pingTimer = null;
-    }
+    if (this._pingTimer) { clearInterval(this._pingTimer); this._pingTimer = null; }
   }
-
   _clearPollTimer() {
-    if (this._pollTimer) {
-      clearInterval(this._pollTimer);
-      this._pollTimer = null;
-    }
+    if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
   }
-
   _clearReconnectTimer() {
-    if (this._reconnectTimer) {
-      clearTimeout(this._reconnectTimer);
-      this._reconnectTimer = null;
-    }
+    if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
   }
 }

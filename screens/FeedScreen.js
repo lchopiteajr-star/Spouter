@@ -224,10 +224,9 @@ export default function FeedScreen({ navigation }) {
   const [status, setStatus] = useState('connecting');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [activeFilter, setActiveFilter] = useState(50_000);
+  const [activeFilter, setActiveFilter] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const trackerRef = useRef(null);
-  const autoRefreshRef = useRef(null);
 
   const effectiveMin = activeFilter; // 0 = All = no floor, passes everything
 
@@ -243,9 +242,8 @@ export default function FeedScreen({ navigation }) {
 
   const handleTrade = useCallback((trade) => {
     setTrades((prev) => {
-      if (prev.length === 0) console.log('[Spouter] first trade shape:', JSON.stringify(trade));
       const next = [trade, ...prev];
-      return next.length > 200 ? next.slice(0, 200) : next;
+      return next.length > 10_000 ? next.slice(0, 10_000) : next;
     });
     setLoading(false);
   }, []);
@@ -265,13 +263,7 @@ export default function FeedScreen({ navigation }) {
     const tracker = new LiveTracker({ onTrade: handleTrade, onStatus: handleStatus });
     trackerRef.current = tracker;
     tracker.start();
-    autoRefreshRef.current = setInterval(() => {
-      if (trackerRef.current) trackerRef.current.refresh();
-    }, 60_000);
-    return () => {
-      tracker.stop();
-      if (autoRefreshRef.current) clearInterval(autoRefreshRef.current);
-    };
+    return () => { tracker.stop(); };
   }, [handleTrade, handleStatus]);
 
   const onRefresh = useCallback(() => {
@@ -285,6 +277,11 @@ export default function FeedScreen({ navigation }) {
       setTimeout(() => setRefreshing(false), remaining);
     };
     setTimeout(finish, 2000);
+  }, []);
+
+  const handleFilterSelect = useCallback((min) => {
+    setActiveFilter(min);
+    if (min > 0 && trackerRef.current) trackerRef.current.fetchForFilter(min);
   }, []);
 
   const handleCardPress = useCallback(
@@ -324,7 +321,7 @@ export default function FeedScreen({ navigation }) {
       </View>
 
       {/* Filter bar */}
-      <FilterBar activeFilter={activeFilter} onSelect={setActiveFilter} />
+      <FilterBar activeFilter={activeFilter} onSelect={handleFilterSelect} />
 
       {/* Feed */}
       <FlatList
