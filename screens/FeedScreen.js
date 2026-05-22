@@ -20,6 +20,14 @@ const FILTERS = [
   { label: '$1M+',   min: 1_000_000 },
 ];
 
+function timeAgo(timestamp) {
+  const diff = Date.now() / 1000 - Number(timestamp);
+  if (diff < 60) return 'just now';
+  if (diff < 3600) { const m = Math.floor(diff / 60); return `${m} minute${m !== 1 ? 's' : ''} ago`; }
+  if (diff < 86400) { const h = Math.floor(diff / 3600); return `${h} hour${h !== 1 ? 's' : ''} ago`; }
+  const d = Math.floor(diff / 86400); return `${d} day${d !== 1 ? 's' : ''} ago`;
+}
+
 // ─── Skeleton ────────────────────────────────────────────────────────────────
 
 function SkeletonCard({ opacity }) {
@@ -108,10 +116,11 @@ function FilterBar({ activeFilter, onSelect }) {
 
 // ─── Trade card ───────────────────────────────────────────────────────────────
 
-function TradeCard({ item, onPress }) {
+function TradeCard({ item, onPress, now }) {
   const isYes = item.direction === 'YES';
   const betColor = isYes ? '#00c896' : '#ff4d4d';
   const betLine = `Bet ${item.direction} — ${item.outcome}`;
+  const timeText = timeAgo(item.timestamp); // recomputed on every tick via `now` prop
 
   const handleShare = async () => {
     try {
@@ -139,7 +148,7 @@ function TradeCard({ item, onPress }) {
         <Text style={styles.footerLeft}>
           <Text style={styles.pseudonym}>{item.pseudonym}</Text>
           <Text style={styles.dot}> · </Text>
-          <Text style={styles.timeAgo}>{item.timeAgo}</Text>
+          <Text style={styles.timeAgo}>{timeText}</Text>
         </Text>
         <TouchableOpacity onPress={handleShare} style={styles.shareBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
           <Text style={styles.shareBtnText}>Share 🔗</Text>
@@ -181,6 +190,7 @@ export default function FeedScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeFilter, setActiveFilter] = useState(100_000);
+  const [now, setNow] = useState(() => Date.now());
   const trackerRef = useRef(null);
   const autoRefreshRef = useRef(null);
 
@@ -209,6 +219,12 @@ export default function FeedScreen({ navigation }) {
     if (s !== 'connecting') setLoading(false);
   }, []);
 
+  // Tick every 60s so card timestamps recompute automatically
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
   useEffect(() => {
     const tracker = new LiveTracker({ onTrade: handleTrade, onStatus: handleStatus });
     trackerRef.current = tracker;
@@ -224,8 +240,15 @@ export default function FeedScreen({ navigation }) {
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
+    const started = Date.now();
     if (trackerRef.current) trackerRef.current.refresh();
-    setTimeout(() => setRefreshing(false), 1500);
+    // Enforce a 2s minimum so the spinner always feels deliberate
+    const finish = () => {
+      const elapsed = Date.now() - started;
+      const remaining = Math.max(0, 2000 - elapsed);
+      setTimeout(() => setRefreshing(false), remaining);
+    };
+    setTimeout(finish, 2000);
   }, []);
 
   const handleCardPress = useCallback(
@@ -236,8 +259,8 @@ export default function FeedScreen({ navigation }) {
   const isError = status === 'error';
 
   const renderItem = useCallback(
-    ({ item }) => <TradeCard item={item} onPress={handleCardPress} />,
-    [handleCardPress]
+    ({ item }) => <TradeCard item={item} onPress={handleCardPress} now={now} />,
+    [handleCardPress, now]
   );
 
   const listEmpty = useCallback(
