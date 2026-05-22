@@ -14,10 +14,9 @@ import { LiveTracker } from '../services/liveTracker';
 
 const FILTERS = [
   { label: 'All',    min: 0         },
+  { label: '$50K+',  min: 50_000    },
   { label: '$100K+', min: 100_000   },
   { label: '$250K+', min: 250_000   },
-  { label: '$500K+', min: 500_000   },
-  { label: '$1M+',   min: 1_000_000 },
 ];
 
 function timeAgo(timestamp) {
@@ -225,12 +224,12 @@ export default function FeedScreen({ navigation }) {
   const [status, setStatus] = useState('connecting');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [activeFilter, setActiveFilter] = useState(100_000);
+  const [activeFilter, setActiveFilter] = useState(50_000);
   const [now, setNow] = useState(() => Date.now());
   const trackerRef = useRef(null);
   const autoRefreshRef = useRef(null);
 
-  const effectiveMin = activeFilter === 0 ? 100_000 : activeFilter;
+  const effectiveMin = activeFilter; // 0 = All = no floor, passes everything
 
   const filteredTrades = useMemo(
     () => trades.filter((t) => t.usdc >= effectiveMin).sort((a, b) => b.timestamp - a.timestamp),
@@ -244,6 +243,7 @@ export default function FeedScreen({ navigation }) {
 
   const handleTrade = useCallback((trade) => {
     setTrades((prev) => {
+      if (prev.length === 0) console.log('[Spouter] first trade shape:', JSON.stringify(trade));
       const next = [trade, ...prev];
       return next.length > 200 ? next.slice(0, 200) : next;
     });
