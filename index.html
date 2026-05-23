@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spouter — Track Polymarket Whale Trades in Real Time</title>
+  <meta name="description" content="See every $50K+ trade on Polymarket the second it happens. Follow the smart money with Spouter." />
+  <meta property="og:title" content="Spouter — Track Polymarket Whale Trades in Real Time" />
+  <meta property="og:description" content="See every $50K+ trade on Polymarket the second it happens." />
+  <meta property="og:type" content="website" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0a0a;
+      --surface: #111111;
+      --border: #1e1e1e;
+      --green: #00ff88;
+      --green-dim: #00c896;
+      --green-bg: rgba(0, 255, 136, 0.08);
+      --green-bg-hover: rgba(0, 255, 136, 0.14);
+      --text: #ffffff;
+      --text-muted: #888888;
+      --text-subtle: #444444;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 20px;
+    }
+
+    /* Nav */
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(10, 10, 10, 0.85);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 60px;
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      text-decoration: none;
+    }
+    .logo-whale { width: 36px; height: 36px; flex-shrink: 0; }
+    .logo-text { font-size: 22px; font-weight: 800; color: #fff; letter-spacing: -0.5px; }
+    .logo-text span { color: var(--green); }
+    .nav-cta {
+      display: inline-flex;
+      align-items: center;
+      background: var(--green);
+      color: #000;
+      font-weight: 700;
+      font-size: 13px;
+      padding: 9px 18px;
+      border-radius: 10px;
+      text-decoration: none;
+      transition: opacity 0.15s;
+    }
+    .nav-cta:hover { opacity: 0.88; }
+
+    /* Hero */
+    .hero { text-align: center; padding: 96px 20px 80px; }
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      background: var(--green-bg);
+      border: 1px solid rgba(0, 255, 136, 0.2);
+      color: var(--green);
+      font-size: 12px;
+      font-weight: 700;
+      padding: 6px 14px;
+      border-radius: 100px;
+      letter-spacing: 0.6px;
+      text-transform: uppercase;
+      margin-bottom: 32px;
+    }
+    .hero-badge-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--green);
+      animation: pulse 1.8s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.2; }
+    }
+    h1 {
+      font-size: clamp(32px, 6vw, 62px);
+      font-weight: 900;
+      line-height: 1.08;
+      letter-spacing: -1.5px;
+      color: #fff;
+      max-width: 800px;
+      margin: 0 auto 20px;
+    }
+    h1 em { font-style: normal; color: var(--green); }
+    .hero-sub {
+      font-size: clamp(15px, 2.5vw, 18px);
+      color: var(--text-muted);
+      max-width: 520px;
+      margin: 0 auto 44px;
+      line-height: 1.65;
+    }
+    .hero-actions {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--green);
+      color: #000;
+      font-weight: 800;
+      font-size: 15px;
+      padding: 14px 28px;
+      border-radius: 12px;
+      text-decoration: none;
+      letter-spacing: -0.2px;
+      transition: opacity 0.15s, transform 0.15s;
+    }
+    .btn-primary:hover { opacity: 0.88; transform: translateY(-1px); }
+    .btn-primary:active { transform: translateY(0); }
+    .btn-secondary {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: transparent;
+      color: #fff;
+      font-weight: 700;
+      font-size: 15px;
+      padding: 14px 24px;
+      border-radius: 12px;
+      text-decoration: none;
+      border: 1px solid #2a2a2a;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .btn-secondary:hover { border-color: #444; background: #141414; }
+
+    /* Mock feed */
+    .feed-preview {
+      position: relative;
+      max-width: 420px;
+      margin: 60px auto 0;
+    }
+    .feed-preview::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 120px;
+      background: linear-gradient(to bottom, transparent, var(--bg));
+      pointer-events: none;
+      border-radius: 0 0 16px 16px;
+    }
+    .mock-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      margin-bottom: 10px;
+      text-align: left;
+    }
+    .mock-card + .mock-card { opacity: 0.6; }
+    .mock-card + .mock-card + .mock-card { opacity: 0.3; }
+    .mock-title { font-size: 13px; font-weight: 700; color: #fff; margin-bottom: 6px; line-height: 1.4; }
+    .mock-bet { font-size: 12px; font-weight: 600; color: var(--green-dim); margin-bottom: 10px; }
+    .mock-amount { font-size: 26px; font-weight: 900; color: var(--green); margin-bottom: 10px; letter-spacing: -0.5px; }
+    .mock-amount.red { color: #ff4d4d; }
+    .mock-footer { display: flex; align-items: center; justify-content: space-between; }
+    .mock-meta { font-size: 11px; color: var(--text-subtle); }
+    .mock-share { font-size: 11px; color: #555; background: #1a1a1a; padding: 4px 10px; border-radius: 6px; }
+    .mock-live { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; color: var(--green); margin-bottom: 12px; }
+    .mock-live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse 1.8s ease-in-out infinite; }
+
+    /* Features */
+    .features { padding: 80px 0; border-top: 1px solid var(--border); }
+    .section-label {
+      text-align: center;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--green);
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+    }
+    h2 {
+      text-align: center;
+      font-size: clamp(26px, 4vw, 40px);
+      font-weight: 900;
+      letter-spacing: -1px;
+      margin-bottom: 48px;
+    }
+    .cards { display: grid; grid-template-columns: 1fr; gap: 16px; }
+    @media (min-width: 640px) { .cards { grid-template-columns: 1fr 1fr; } }
+    @media (min-width: 900px) { .cards { grid-template-columns: 1fr 1fr 1fr; } }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 28px;
+      transition: border-color 0.2s;
+    }
+    .card:hover { border-color: rgba(0, 255, 136, 0.3); }
+    .card-icon {
+      width: 44px; height: 44px;
+      background: var(--green-bg);
+      border: 1px solid rgba(0, 255, 136, 0.15);
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: 18px;
+      font-size: 20px;
+    }
+    .card h3 { font-size: 17px; font-weight: 800; color: #fff; margin-bottom: 10px; letter-spacing: -0.3px; }
+    .card p { font-size: 14px; color: var(--text-muted); line-height: 1.65; }
+
+    /* Social proof */
+    .proof { padding: 72px 0; border-top: 1px solid var(--border); text-align: center; }
+    .proof-label { font-size: 12px; color: var(--text-subtle); font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 36px; }
+    .stats { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; }
+    .stat { flex: 1; min-width: 160px; padding: 20px; position: relative; }
+    .stat + .stat::before {
+      content: ''; position: absolute; left: 0; top: 20%; height: 60%; width: 1px; background: var(--border);
+    }
+    .stat-value {
+      font-size: clamp(28px, 5vw, 40px);
+      font-weight: 900;
+      color: var(--green);
+      letter-spacing: -1px;
+      line-height: 1;
+      margin-bottom: 8px;
+    }
+    .stat-label { font-size: 13px; color: var(--text-muted); }
+
+    /* Email capture */
+    .capture { padding: 80px 0; border-top: 1px solid var(--border); }
+    .capture-inner {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 48px 32px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .capture-inner::before {
+      content: '';
+      position: absolute;
+      top: -80px; left: 50%;
+      transform: translateX(-50%);
+      width: 400px; height: 400px;
+      background: radial-gradient(circle, rgba(0, 255, 136, 0.06) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .capture-inner h2 { margin-bottom: 12px; }
+    .capture-sub { font-size: 15px; color: var(--text-muted); margin-bottom: 32px; line-height: 1.6; }
+    .capture-form {
+      display: flex;
+      gap: 10px;
+      max-width: 420px;
+      margin: 0 auto;
+      flex-wrap: wrap;
+    }
+    .capture-form input[type="email"] {
+      flex: 1;
+      min-width: 200px;
+      background: #0a0a0a;
+      border: 1px solid #2a2a2a;
+      border-radius: 10px;
+      padding: 13px 16px;
+      font-size: 14px;
+      color: #fff;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .capture-form input[type="email"]::placeholder { color: #444; }
+    .capture-form input[type="email"]:focus { border-color: rgba(0, 255, 136, 0.5); }
+    .capture-form button {
+      background: var(--green);
+      color: #000;
+      font-weight: 800;
+      font-size: 14px;
+      padding: 13px 22px;
+      border-radius: 10px;
+      border: none;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: opacity 0.15s;
+    }
+    .capture-form button:hover { opacity: 0.88; }
+    .capture-form button:disabled { opacity: 0.5; cursor: default; }
+    .capture-success { display: none; color: var(--green); font-weight: 700; font-size: 15px; margin-top: 16px; }
+    .capture-success.visible { display: block; }
+    .privacy-note { font-size: 11px; color: var(--text-subtle); margin-top: 14px; }
+
+    /* Footer */
+    footer { border-top: 1px solid var(--border); padding: 32px 20px; }
+    .footer-inner { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
+    .footer-links { display: flex; align-items: center; gap: 20px; }
+    .footer-links a { font-size: 13px; color: var(--text-muted); text-decoration: none; transition: color 0.15s; }
+    .footer-links a:hover { color: var(--green); }
+    .footer-copy { font-size: 12px; color: var(--text-subtle); }
+
+    @media (max-width: 480px) {
+      .hero { padding: 64px 16px 56px; }
+      .capture-inner { padding: 36px 20px; }
+      .stat + .stat::before { display: none; }
+      .stats { gap: 8px; }
+      .stat { border: 1px solid var(--border); border-radius: 12px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav>
+  <div class="container">
+    <div class="nav-inner">
+      <a href="/" class="logo" aria-label="Spouter home">
+        <svg class="logo-whale" viewBox="0 0 104 90" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M10 60 Q20 30 50 38 Q72 44 82 28 Q88 18 94 24 Q82 48 62 54 Q78 58 80 72 Q66 62 50 64 Q34 66 22 80 Q14 70 10 60Z" fill="#00ff88"/>
+        </svg>
+        <span class="logo-text">Spout<span>er</span></span>
+      </a>
+      <a href="#beta" class="nav-cta">Download</a>
+    </div>
+  </div>
+</nav>
+
+<section class="hero">
+  <div class="container">
+    <div class="hero-badge">
+      <div class="hero-badge-dot"></div>
+      Live on Polymarket
+    </div>
+    <h1>See What the Whales Are Betting.<br><em>In Real Time.</em></h1>
+    <p class="hero-sub">
+      Track every $50K+ trade on Polymarket the second it happens.
+      Follow the smart money.
+    </p>
+    <div class="hero-actions">
+      <a href="#beta" class="btn-primary">🐋 Join the Beta</a>
+      <a href="#beta" class="btn-secondary">Download App</a>
+    </div>
+    <div class="feed-preview" aria-hidden="true">
+      <div class="mock-live">
+        <div class="mock-live-dot"></div>
+        LIVE · 3 whales spotted
+      </div>
+      <div class="mock-card">
+        <div class="mock-title">Will Trump win the 2026 midterms popular vote?</div>
+        <div class="mock-bet">Bet YES — Yes</div>
+        <div class="mock-amount">$284K</div>
+        <div class="mock-footer">
+          <div class="mock-meta">CryptoOracle · just now</div>
+          <div class="mock-share">Share 🔗</div>
+        </div>
+      </div>
+      <div class="mock-card">
+        <div class="mock-title">Will Bitcoin hit $150K before July 2026?</div>
+        <div class="mock-bet">Bet NO — No</div>
+        <div class="mock-amount red">$127K</div>
+        <div class="mock-footer">
+          <div class="mock-meta">WhaleWatcher · 2 min ago</div>
+          <div class="mock-share">Share 🔗</div>
+        </div>
+      </div>
+      <div class="mock-card">
+        <div class="mock-title">NBA Finals 2026 — Celtics vs Knicks</div>
+        <div class="mock-bet">Bet YES — Celtics win</div>
+        <div class="mock-amount">$1.2M</div>
+        <div class="mock-footer">
+          <div class="mock-meta">SportsWizard · 5 min ago</div>
+          <div class="mock-share">Share 🔗</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="features">
+  <div class="container">
+    <div class="section-label">Why Spouter</div>
+    <h2>Everything you need to follow the money</h2>
+    <div class="cards">
+      <div class="card">
+        <div class="card-icon">⚡</div>
+        <h3>Live Feed</h3>
+        <p>Every $50K+ trade on Polymarket hits your feed in real time. WebSocket-powered with REST backup so you never miss a move.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">🐋</div>
+        <h3>Whale Intelligence</h3>
+        <p>See who's betting big and their full track record. Win rate, total P&amp;L, and a letter grade so you know if a whale is sharp or just rich.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">🔔</div>
+        <h3>Smart Alerts</h3>
+        <p>Get notified the second a whale makes a move above your threshold. Never be the last to know when serious money moves.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="proof">
+  <div class="container">
+    <div class="proof-label">Trusted by Polymarket traders</div>
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-value">10K+</div>
+        <div class="stat-label">Trades tracked</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value">$50M+</div>
+        <div class="stat-label">In whale bets monitored</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value">Real time</div>
+        <div class="stat-label">WebSocket-powered data</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="capture" id="beta">
+  <div class="container">
+    <div class="capture-inner">
+      <h2>Join the Beta</h2>
+      <p class="capture-sub">Get early access to Spouter Pro — advanced filters,<br>push alerts, and whale leaderboards.</p>
+      <form class="capture-form" action="https://formspree.io/f/YOUR_FORM_ID" method="POST" id="betaForm">
+        <input type="email" name="email" placeholder="you@example.com" required autocomplete="email" aria-label="Email address" />
+        <button type="submit" id="betaBtn">Get Early Access</button>
+      </form>
+      <p class="capture-success" id="captureSuccess">🐋 You're on the list! We'll be in touch soon.</p>
+      <p class="privacy-note">No spam. Unsubscribe any time.</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <div class="footer-inner">
+      <a href="/" class="logo" aria-label="Spouter home">
+        <svg width="28" height="28" viewBox="0 0 104 90" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M10 60 Q20 30 50 38 Q72 44 82 28 Q88 18 94 24 Q82 48 62 54 Q78 58 80 72 Q66 62 50 64 Q34 66 22 80 Q14 70 10 60Z" fill="#00ff88"/>
+        </svg>
+        <span class="logo-text" style="font-size:18px;">Spout<span>er</span></span>
+      </a>
+      <div class="footer-links">
+        <a href="https://x.com/Spouter" target="_blank" rel="noopener noreferrer">@Spouter on X</a>
+        <a href="https://spouter.pro">spouter.pro</a>
+      </div>
+      <div class="footer-copy">© 2026 Spouter. All rights reserved.</div>
+    </div>
+  </div>
+</footer>
+
+<script>
+  const form = document.getElementById('betaForm');
+  const btn = document.getElementById('betaBtn');
+  const success = document.getElementById('captureSuccess');
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    btn.disabled = true;
+    btn.textContent = 'Sending…';
+    try {
+      const res = await fetch(form.action, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json' },
+        body: new FormData(form),
+      });
+      if (res.ok) {
+        form.style.display = 'none';
+        success.classList.add('visible');
+      } else {
+        btn.disabled = false;
+        btn.textContent = 'Get Early Access';
+        alert('Something went wrong. Please try again.');
+      }
+    } catch (_) {
+      btn.disabled = false;
+      btn.textContent = 'Get Early Access';
+      alert('Something went wrong. Please try again.');
+    }
+  });
+</script>
+
+</body>
+</html>
